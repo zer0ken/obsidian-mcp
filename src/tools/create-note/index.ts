@@ -12,7 +12,7 @@ export const CreateNoteSchema = z.object({
   filename: z.string()
     .min(1, "Filename cannot be empty")
     .refine(name => !name.includes('/') && !name.includes('\\'), 
-      "Filename cannot contain path separators"),
+      "Filename cannot contain path separators - use the 'folder' parameter for paths instead. Example: use filename:'note.md', folder:'my/path' instead of filename:'my/path/note.md'"),
   content: z.string()
     .min(1, "Content cannot be empty"),
   folder: z.string()
@@ -20,16 +20,15 @@ export const CreateNoteSchema = z.object({
     .refine(folder => !folder || !path.isAbsolute(folder), 
       "Folder must be a relative path")
 });
-
 async function createNote(
-  vaultPath: string, 
-  filename: string, 
-  content: string, 
+  vaultPath: string,
+  filename: string,
+  content: string,
   folder?: string
 ): Promise<string> {
   const sanitizedFilename = ensureMarkdownExtension(filename);
-  
-  const notePath = folder 
+
+  const notePath = folder
     ? path.join(vaultPath, folder, sanitizedFilename)
     : path.join(vaultPath, sanitizedFilename);
 
@@ -61,16 +60,20 @@ export function createCreateNoteTool(vaultPath: string): Tool {
   if (!vaultPath) {
     throw new Error("Vault path is required");
   }
-
   return {
     name: "create-note",
-    description: "Create a new note in the vault with markdown content",
+    description: `Create a new note in the vault with markdown content.
+
+Examples:
+- Root note: { "filename": "note.md" }
+- Subfolder note: { "filename": "note.md", "folder": "journal/2024" }
+- INCORRECT: { "filename": "journal/2024/note.md" } (don't put path in filename)`,
     inputSchema: {
       type: "object",
       properties: {
         filename: {
           type: "string",
-          description: "Name of the note (will add .md extension if missing)"
+          description: "Just the note name without any path separators (e.g. 'my-note.md', NOT 'folder/my-note.md'). Will add .md extension if missing"
         },
         content: {
           type: "string",
@@ -78,7 +81,7 @@ export function createCreateNoteTool(vaultPath: string): Tool {
         },
         folder: {
           type: "string",
-          description: "Optional subfolder path (relative to vault root)"
+          description: "Optional subfolder path relative to vault root (e.g. 'journal/subfolder'). Use this for the path instead of including it in filename"
         }
       },
       required: ["filename", "content"]
@@ -87,7 +90,7 @@ export function createCreateNoteTool(vaultPath: string): Tool {
       try {
         const { filename, content, folder } = CreateNoteSchema.parse(args);
         const notePath = await createNote(vaultPath, filename, content, folder);
-        
+
         return {
           content: [
             {

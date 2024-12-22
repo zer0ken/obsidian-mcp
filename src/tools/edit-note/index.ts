@@ -3,22 +3,20 @@ import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { validateVaultPath } from "../../utils/path.js";
+import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js";
 import { fileExists } from "../../utils/files.js";
 import { createNoteNotFoundError, handleFsError, handleZodError } from "../../utils/errors.js";
 
 // Improved schema with more precise validation
 export const EditNoteSchema = z.object({
-  path: z.string()
+  filename: z.string()
     .min(1, "Filename cannot be empty")
-    .refine(
-      name => !name.includes('/') && !name.includes('\\'),
-      "Please provide only the filename without any path separators"
-    )
-    .refine(
-      name => name.endsWith('.md'),
-      "Note must have .md extension"
-    ),
+    .refine(name => !name.includes('/') && !name.includes('\\'), 
+      "Filename cannot contain path separators - use the 'folder' parameter for paths instead. Example: use filename:'note.md', folder:'my/path' instead of filename:'my/path/note.md'"),
+  folder: z.string()
+    .optional()
+    .refine(folder => !folder || !path.isAbsolute(folder), 
+      "Folder must be a relative path"),
   operation: z.enum(['append', 'prepend', 'replace', 'delete']),
   content: z.string().optional()
     .superRefine((content, ctx) => {
@@ -43,11 +41,15 @@ type EditOperation = z.infer<typeof EditNoteSchema>['operation'];
 
 async function editNote(
   vaultPath: string, 
-  filename: string, 
+  filename: string,
   operation: EditOperation,
-  content?: string
+  content?: string,
+  folder?: string
 ): Promise<string> {
-  const fullPath = path.join(vaultPath, filename);
+  const sanitizedFilename = ensureMarkdownExtension(filename);
+  const fullPath = folder
+    ? path.join(vaultPath, folder, sanitizedFilename)
+    : path.join(vaultPath, sanitizedFilename);
   
   // Validate path is within vault
   validateVaultPath(vaultPath, fullPath);
@@ -108,13 +110,22 @@ async function editNote(
 export function createEditNoteTool(vaultPath: string): Tool {
   return {
     name: "edit-note",
-    description: "Edit an existing note (use only filename, not full path)",
+    description: `Edit an existing note in the vault.
+
+Examples:
+- Root note: { "filename": "note.md", "operation": "append", "content": "new content" }
+- Subfolder note: { "filename": "note.md", "folder": "journal/2024", "operation": "append", "content": "new content" }
+- INCORRECT: { "filename": "journal/2024/note.md" } (don't put path in filename)`,
     inputSchema: {
       type: "object",
       properties: {
-        path: {
+        filename: {
+          type: "string", 
+          description: "Just the note name without any path separators (e.g. 'my-note.md', NOT 'folder/my-note.md'). Will add .md extension if missing"
+        },
+        folder: {
           type: "string",
-          description: "Name of the note file (e.g., 'note.md'), not full path"
+          description: "Optional subfolder path relative to vault root (e.g. 'journal/subfolder'). Use this for the path instead of including it in filename"
         },
         operation: {
           type: "string",
@@ -126,15 +137,15 @@ export function createEditNoteTool(vaultPath: string): Tool {
           description: "New content (not needed for delete)"
         }
       },
-      required: ["path", "operation"]
+      required: ["filename", "operation"]
     },
     handler: async (args) => {
       try {
         // Parse and validate input
-        const { path: notePath, operation, content } = EditNoteSchema.parse(args);
+        const { filename, folder, operation, content } = EditNoteSchema.parse(args);
         
         // Execute the edit operation
-        const resultMessage = await editNote(vaultPath, notePath, operation, content);
+        const resultMessage = await editNote(vaultPath, filename, operation, content, folder);
         
         // Return a more informative response
         return {

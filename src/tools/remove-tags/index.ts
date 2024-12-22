@@ -28,8 +28,8 @@ const RemoveTagsSchema = z.object({
   tags: z.array(z.string())
     .min(1, "At least one tag must be specified")
     .refine(
-      tags => tags.every(validateTag),
-      "Invalid tag format. Tags must contain only letters, numbers, and forward slashes for hierarchy."
+      tags => tags.every(tag => /^[a-zA-Z0-9\/]+$/.test(tag)),
+      "Tags must contain only letters, numbers, and forward slashes. Do not include the # symbol. Examples: 'project', 'work/active', 'tasks/2024/q1'"
     ),
   options: z.object({
     location: z.enum(['frontmatter', 'content', 'both']).default('both'),
@@ -169,21 +169,29 @@ async function removeTags(
 }
 
 export function createRemoveTagsTool(vaultPath: string): Tool {
+  if (!vaultPath) {
+    throw new Error("Vault path is required");
+  }
   return {
     name: "remove-tags",
-    description: "Remove tags from notes with support for hierarchical removal and patterns",
+    description: `Remove tags from notes in frontmatter and/or content.
+Examples:
+- Simple: { "files": ["note.md"], "tags": ["project", "status"] }
+- With hierarchy: { "files": ["note.md"], "tags": ["work/active", "priority/high"] }
+- With options: { "files": ["note.md"], "tags": ["status"], "options": { "location": "frontmatter" } }
+- INCORRECT: { "tags": ["#project"] } (don't include # symbol)`,
     inputSchema: {
       type: "object",
       properties: {
         files: {
           type: "array",
           items: { type: "string" },
-          description: "Array of note filenames to process"
+          description: "Array of note filenames to process",
         },
         tags: {
           type: "array",
           items: { type: "string" },
-          description: "Array of tags to remove"
+          description: "Array of tags to remove (without # symbol). Example: ['project', 'work/active']"
         },
         options: {
           type: "object",
