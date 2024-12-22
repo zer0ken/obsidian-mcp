@@ -6,6 +6,9 @@ import { createSearchVaultTool } from "./tools/search-vault/index.js";
 import { createMoveNoteTool } from "./tools/move-note/index.js";
 import { createCreateDirectoryTool } from "./tools/create-directory/index.js";
 import { createDeleteNoteTool } from "./tools/delete-note/index.js";
+import { createAddTagsTool } from "./tools/add-tags/index.js";
+import { createRemoveTagsTool } from "./tools/remove-tags/index.js";
+import { createRenameTagTool } from "./tools/rename-tag/index.js";
 
 async function main() {
   const vaultPath = process.argv[2];
@@ -24,6 +27,9 @@ async function main() {
     server.registerTool(createMoveNoteTool(vaultPath));
     server.registerTool(createCreateDirectoryTool(vaultPath));
     server.registerTool(createDeleteNoteTool(vaultPath));
+    server.registerTool(createAddTagsTool(vaultPath));
+    server.registerTool(createRemoveTagsTool(vaultPath));
+    server.registerTool(createRenameTagTool(vaultPath));
 
     await server.start();
   } catch (error) {
