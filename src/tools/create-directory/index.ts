@@ -3,18 +3,25 @@ import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { createSchemaHandler } from "../../utils/schema.js";
 
-// Schema for directory creation
-export const CreateDirectorySchema = z.object({
+// Input validation schema with descriptions
+const schema = z.object({
   path: z.string()
     .min(1, "Directory path cannot be empty")
     .refine(dirPath => !path.isAbsolute(dirPath), 
-      "Directory path must be relative to vault root"),
+      "Directory path must be relative to vault root")
+    .describe("Path of the directory to create (relative to vault root)"),
   recursive: z.boolean()
     .optional()
     .default(true)
-});
+    .describe("Create parent directories if they don't exist")
+}).strict();
 
+// Create schema handler that provides both Zod validation and JSON Schema
+const schemaHandler = createSchemaHandler(schema);
+
+// Helper function to create directory
 async function createDirectory(
   vaultPath: string,
   dirPath: string,
@@ -66,23 +73,11 @@ export function createCreateDirectoryTool(vaultPath: string): Tool {
   return {
     name: "create-directory",
     description: "Create a new directory in the vault",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Path of the directory to create (relative to vault root)"
-        },
-        recursive: {
-          type: "boolean",
-          description: "Create parent directories if they don't exist (defaults to true)"
-        }
-      },
-      required: ["path"]
-    },
+    inputSchema: schemaHandler,
     handler: async (args) => {
       try {
-        const { path: dirPath, recursive } = CreateDirectorySchema.parse(args);
+        const validated = schemaHandler.parse(args);
+        const { path: dirPath, recursive = true } = validated;
         const createdPath = await createDirectory(vaultPath, dirPath, recursive);
         
         return {

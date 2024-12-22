@@ -1,40 +1,71 @@
-import { promises as fs } from "fs";
+import { promises as fs, Dirent } from "fs";
 import path from "path";
-import { checkPathSafety } from "./path.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { normalizePath, safeJoinPath } from "./path.js";
 
 /**
  * Recursively gets all markdown files in a directory
  */
 export async function getAllMarkdownFiles(vaultPath: string, dir = vaultPath): Promise<string[]> {
+  // Normalize paths upfront
+  const normalizedVaultPath = normalizePath(vaultPath);
+  const normalizedDir = normalizePath(dir);
+
+  // Verify directory is within vault
+  if (!normalizedDir.startsWith(normalizedVaultPath)) {
+    throw new McpError(
+      ErrorCode.InvalidRequest,
+      `Search directory must be within vault: ${dir}`
+    );
+  }
+
   try {
     const files: string[] = [];
-    const entries = await fs.readdir(dir, { withFileTypes: true });
+    let entries: Dirent[];
+    
+    try {
+      entries = await fs.readdir(normalizedDir, { withFileTypes: true });
+    } catch (error) {
+      if ((error as any).code === 'ENOENT') {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `Directory not found: ${dir}`
+        );
+      }
+      throw error;
+    }
 
     for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      
-      // First check if the path is safe
-      if (!await checkPathSafety(vaultPath, fullPath)) {
-        console.error(`Skipping path outside vault: ${fullPath}`);
-        continue;
-      }
-
       try {
-        if (entry.isDirectory() && !entry.name.startsWith(".")) {
-          files.push(...await getAllMarkdownFiles(vaultPath, fullPath));
+        // Use safeJoinPath to ensure path safety
+        const fullPath = safeJoinPath(normalizedDir, entry.name);
+        
+        if (entry.isDirectory()) {
+          if (!entry.name.startsWith(".")) {
+            const subDirFiles = await getAllMarkdownFiles(normalizedVaultPath, fullPath);
+            files.push(...subDirFiles);
+          }
         } else if (entry.isFile() && entry.name.endsWith(".md")) {
           files.push(fullPath);
         }
-      } catch (err) {
-        console.error(`Error processing ${fullPath}:`, err);
-        // Continue with other files
+      } catch (error) {
+        // Log but don't throw - we want to continue processing other files
+        if (error instanceof McpError) {
+          console.error(`Skipping ${entry.name}:`, error.message);
+        } else {
+          console.error(`Error processing ${entry.name}:`, error);
+        }
       }
     }
 
     return files;
-  } catch (err) {
-    console.error(`Error reading directory ${dir}:`, err);
-    return [];
+  } catch (error) {
+    if (error instanceof McpError) throw error;
+    
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Failed to read directory ${dir}: ${error instanceof Error ? error.message : String(error)}`
+    );
   }
 }
 
@@ -42,11 +73,16 @@ export async function getAllMarkdownFiles(vaultPath: string, dir = vaultPath): P
  * Ensures a directory exists, creating it if necessary
  */
 export async function ensureDirectory(dirPath: string): Promise<void> {
+  const normalizedPath = normalizePath(dirPath);
+  
   try {
-    await fs.mkdir(dirPath, { recursive: true });
+    await fs.mkdir(normalizedPath, { recursive: true });
   } catch (error: any) {
     if (error.code !== 'EEXIST') {
-      throw error;
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to create directory ${dirPath}: ${error.message}`
+      );
     }
   }
 }
@@ -55,8 +91,10 @@ export async function ensureDirectory(dirPath: string): Promise<void> {
  * Checks if a file exists
  */
 export async function fileExists(filePath: string): Promise<boolean> {
+  const normalizedPath = normalizePath(filePath);
+  
   try {
-    await fs.access(filePath);
+    await fs.access(normalizedPath);
     return true;
   } catch {
     return false;
@@ -68,12 +106,17 @@ export async function fileExists(filePath: string): Promise<boolean> {
  * Returns undefined if file doesn't exist
  */
 export async function safeReadFile(filePath: string): Promise<string | undefined> {
+  const normalizedPath = normalizePath(filePath);
+  
   try {
-    return await fs.readFile(filePath, 'utf-8');
+    return await fs.readFile(normalizedPath, 'utf-8');
   } catch (error: any) {
     if (error.code === 'ENOENT') {
       return undefined;
     }
-    throw error;
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Failed to read file ${filePath}: ${error.message}`
+    );
   }
 }

@@ -3,7 +3,6 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { handleZodError } from "../../utils/errors.js";
 import {
   validateTag,
   normalizeTag,
@@ -17,27 +16,39 @@ import {
   safeReadFile,
   fileExists
 } from "../../utils/files.js";
+import { createSchemaHandler } from "../../utils/schema.js";
 
-// Schema for tag renaming operations
-const RenameTagSchema = z.object({
+// Input validation schema with descriptions
+const schema = z.object({
   oldTag: z.string()
     .min(1, "Old tag must not be empty")
     .refine(
       tag => /^[a-zA-Z0-9\/]+$/.test(tag),
       "Tags must contain only letters, numbers, and forward slashes. Do not include the # symbol. Examples: 'project', 'work/active', 'tasks/2024/q1'"
-    ),
+    )
+    .describe("The tag to rename (without #). Example: 'project' or 'work/active'"),
   newTag: z.string()
     .min(1, "New tag must not be empty")
     .refine(
       tag => /^[a-zA-Z0-9\/]+$/.test(tag),
       "Tags must contain only letters, numbers, and forward slashes. Do not include the # symbol. Examples: 'project', 'work/active', 'tasks/2024/q1'"
-    ),
-  createBackup: z.boolean().default(true),
-  normalize: z.boolean().default(true),
-  batchSize: z.number().min(1).max(100).default(50)
-});
+    )
+    .describe("The new tag name (without #). Example: 'projects' or 'work/current'"),
+  createBackup: z.boolean()
+    .default(true)
+    .describe("Whether to create a backup before making changes (default: true)"),
+  normalize: z.boolean()
+    .default(true)
+    .describe("Whether to normalize tag names (e.g., ProjectActive -> project-active) (default: true)"),
+  batchSize: z.number()
+    .min(1)
+    .max(100)
+    .default(50)
+    .describe("Number of files to process in each batch (1-100) (default: 50)")
+}).strict();
 
-type RenameTagOptions = z.infer<typeof RenameTagSchema>;
+// Types
+type RenameTagInput = z.infer<typeof schema>;
 
 interface TagReplacement {
   oldTag: string;
@@ -61,6 +72,9 @@ interface RenameTagReport {
   timestamp: string;
   backupCreated?: string;
 }
+
+// Create schema handler that provides both Zod validation and JSON Schema
+const schemaHandler = createSchemaHandler(schema);
 
 /**
  * Creates a backup of the vault
@@ -336,116 +350,9 @@ async function processBatch(
 /**
  * Renames tags throughout the vault while preserving hierarchies
  */
-/**
- * Creates the rename-tag tool
- */
-export function createRenameTagTool(vaultPath: string): Tool {
-  return {
-    name: 'rename-tag',
-    description: `Safely renames tags throughout the vault while preserving hierarchies.
-Examples:
-- Simple rename: { "oldTag": "project", "newTag": "projects" }
-- Rename with hierarchy: { "oldTag": "work/active", "newTag": "projects/current" }
-- With options: { "oldTag": "status", "newTag": "state", "normalize": true, "createBackup": true }
-- INCORRECT: { "oldTag": "#project" } (don't include # symbol)`,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        oldTag: {
-          type: 'string',
-          description: 'The tag to rename (without #). Example: "project" or "work/active"',
-        },
-        newTag: {
-          type: 'string',
-          description: 'The new tag name (without #). Example: "projects" or "work/current"',
-        },
-        createBackup: {
-          type: 'boolean',
-          description: 'Whether to create a backup before making changes',
-          default: true,
-        },
-        normalize: {
-          type: 'boolean',
-          description: 'Whether to normalize tag names (e.g., ProjectActive -> project-active)',
-          default: true,
-        },
-        batchSize: {
-          type: 'number',
-          description: 'Number of files to process in each batch (1-100)',
-          default: 50,
-        },
-      },
-      required: ['oldTag', 'newTag'],
-    },
-    handler: async (args) => {
-      try {
-        // Parse and validate input
-        const params = RenameTagSchema.parse(args);
-        
-        // Execute tag renaming
-        const report = await renameTag(vaultPath, params);
-        
-        // Format response message
-        let message = '';
-        
-        // Add backup info if created
-        if (report.backupCreated) {
-          message += `Created backup at: ${report.backupCreated}\n\n`;
-        }
-        
-        // Add success summary
-        if (report.successful.length > 0) {
-          message += `Successfully renamed tags in ${report.successful.length} locations:\n\n`;
-          
-          // Group changes by file
-          const changesByFile = report.successful.reduce((acc, change) => {
-            if (!acc[change.filePath]) {
-              acc[change.filePath] = [];
-            }
-            acc[change.filePath].push(change);
-            return acc;
-          }, {} as Record<string, typeof report.successful>);
-          
-          // Report changes for each file
-          for (const [file, changes] of Object.entries(changesByFile)) {
-            message += `${file}:\n`;
-            changes.forEach(change => {
-              const location = change.line 
-                ? `${change.location} (line ${change.line})`
-                : change.location;
-              message += `  ${location}: ${change.oldTags.join(', ')} -> ${change.newTags.join(', ')}\n`;
-            });
-            message += '\n';
-          }
-        }
-        
-        // Add errors if any
-        if (report.failed.length > 0) {
-          message += 'Errors:\n';
-          report.failed.forEach(error => {
-            message += `  ${error.filePath}: ${error.error}\n`;
-          });
-        }
-
-        return {
-          content: [{
-            type: 'text',
-            text: message.trim()
-          }]
-        };
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          handleZodError(error);
-        }
-        throw error;
-      }
-    },
-  };
-}
-
 async function renameTag(
   vaultPath: string,
-  params: RenameTagOptions
+  params: RenameTagInput
 ): Promise<RenameTagReport> {
   try {
     // Validate tags (though Zod schema already handles this)
@@ -506,4 +413,96 @@ async function renameTag(
       error instanceof Error ? error.message : 'Unknown error during tag renaming'
     );
   }
+}
+
+export function createRenameTagTool(vaultPath: string): Tool {
+  if (!vaultPath) {
+    throw new Error("Vault path is required");
+  }
+  return {
+    name: 'rename-tag',
+    description: `Safely renames tags throughout the vault while preserving hierarchies.
+
+Examples:
+- Simple rename: { "oldTag": "project", "newTag": "projects" }
+- Rename with hierarchy: { "oldTag": "work/active", "newTag": "projects/current" }
+- With options: { "oldTag": "status", "newTag": "state", "normalize": true, "createBackup": true }
+- INCORRECT: { "oldTag": "#project" } (don't include # symbol)`,
+    inputSchema: schemaHandler,
+    handler: async (args) => {
+      try {
+        // Parse and validate input
+        const parsed = schemaHandler.parse(args);
+        
+        // Ensure defaults are set
+        const validated = {
+          oldTag: parsed.oldTag,
+          newTag: parsed.newTag,
+          createBackup: parsed.createBackup ?? true,
+          normalize: parsed.normalize ?? true,
+          batchSize: parsed.batchSize ?? 50
+        };
+        
+        // Execute tag renaming
+        const results = await renameTag(vaultPath, validated);
+        
+        // Format response message
+        let message = '';
+        
+        // Add backup info if created
+        if (results.backupCreated) {
+          message += `Created backup at: ${results.backupCreated}\n\n`;
+        }
+        
+        // Add success summary
+        if (results.successful.length > 0) {
+          message += `Successfully renamed tags in ${results.successful.length} locations:\n\n`;
+          
+          // Group changes by file
+          const changesByFile = results.successful.reduce((acc, change) => {
+            if (!acc[change.filePath]) {
+              acc[change.filePath] = [];
+            }
+            acc[change.filePath].push(change);
+            return acc;
+          }, {} as Record<string, typeof results.successful>);
+          
+          // Report changes for each file
+          for (const [file, changes] of Object.entries(changesByFile)) {
+            message += `${file}:\n`;
+            changes.forEach(change => {
+              const location = change.line 
+                ? `${change.location} (line ${change.line})`
+                : change.location;
+              message += `  ${location}: ${change.oldTags.join(', ')} -> ${change.newTags.join(', ')}\n`;
+            });
+            message += '\n';
+          }
+        }
+        
+        // Add errors if any
+        if (results.failed.length > 0) {
+          message += 'Errors:\n';
+          results.failed.forEach(error => {
+            message += `  ${error.filePath}: ${error.error}\n`;
+          });
+        }
+
+        return {
+          content: [{
+            type: 'text',
+            text: message.trim()
+          }]
+        };
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
+          );
+        }
+        throw error;
+      }
+    }
+  };
 }

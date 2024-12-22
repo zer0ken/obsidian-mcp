@@ -2,20 +2,31 @@ import { z } from "zod";
 import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js";
 import { fileExists, ensureDirectory } from "../../utils/files.js";
 import { updateVaultLinks } from "../../utils/links.js";
-import { createNoteNotFoundError, handleFsError, handleZodError } from "../../utils/errors.js";
+import { createNoteNotFoundError, handleFsError } from "../../utils/errors.js";
+import { createSchemaHandler } from "../../utils/schema.js";
 
-// Schema for delete note operation
-export const DeleteNoteSchema = z.object({
+// Input validation schema with descriptions
+const schema = z.object({
   path: z.string()
     .min(1, "Path cannot be empty")
-    .refine(name => !path.isAbsolute(name), "Path must be relative to vault root"),
-  reason: z.string().optional(),
-  permanent: z.boolean().optional().default(false)
-});
+    .refine(name => !path.isAbsolute(name), 
+      "Path must be relative to vault root")
+    .describe("Path of the note relative to vault root (e.g., 'folder/note.md')"),
+  reason: z.string()
+    .optional()
+    .describe("Optional reason for deletion (stored in trash metadata)"),
+  permanent: z.boolean()
+    .optional()
+    .default(false)
+    .describe("Whether to permanently delete instead of moving to trash (default: false)")
+}).strict();
+
+// Create schema handler that provides both Zod validation and JSON Schema
+const schemaHandler = createSchemaHandler(schema);
 
 interface TrashMetadata {
   originalPath: string;
@@ -120,27 +131,11 @@ export function createDeleteNoteTool(vaultPath: string): Tool {
   return {
     name: "delete-note",
     description: "Delete a note, moving it to .trash by default or permanently deleting if specified",
-    inputSchema: {
-      type: "object",
-      properties: {
-        path: {
-          type: "string",
-          description: "Path of the note relative to vault root (e.g., 'folder/note.md')"
-        },
-        reason: {
-          type: "string",
-          description: "Optional reason for deletion (stored in trash metadata)"
-        },
-        permanent: {
-          type: "boolean",
-          description: "Whether to permanently delete instead of moving to trash (default: false)"
-        }
-      },
-      required: ["path"]
-    },
+    inputSchema: schemaHandler,
     handler: async (args) => {
       try {
-        const { path: notePath, reason, permanent } = DeleteNoteSchema.parse(args);
+        const validated = schemaHandler.parse(args);
+        const { path: notePath, reason, permanent } = validated;
         
         // Ensure .md extension
         const fullNotePath = ensureMarkdownExtension(notePath);
@@ -157,7 +152,10 @@ export function createDeleteNoteTool(vaultPath: string): Tool {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          handleZodError(error);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
+          );
         }
         throw error;
       }

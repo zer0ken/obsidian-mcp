@@ -5,7 +5,6 @@ import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { validateVaultPath } from "../../utils/path.js";
 import { fileExists, getAllMarkdownFiles, safeReadFile } from "../../utils/files.js";
-import { handleFsError, handleZodError } from "../../utils/errors.js";
 import {
   validateTag,
   parseNote,
@@ -18,16 +17,18 @@ import {
   getRelatedTags,
   normalizeTag
 } from "../../utils/tags.js";
+import { createSchemaHandler } from "../../utils/schema.js";
 
-// Schema for tag management operations
-const ManageTagsSchema = z.object({
+// Input validation schema
+const schema = z.object({
   files: z.array(z.string())
     .min(1, "At least one file must be specified")
     .refine(
       files => files.every(f => f.endsWith('.md')),
       "All files must have .md extension"
     ),
-  operation: z.enum(['add', 'remove']),
+  operation: z.enum(['add', 'remove'])
+    .describe("Whether to add or remove the specified tags"),
   tags: z.array(z.string())
     .min(1, "At least one tag must be specified")
     .refine(
@@ -35,11 +36,21 @@ const ManageTagsSchema = z.object({
       "Invalid tag format. Tags must contain only letters, numbers, and forward slashes for hierarchy."
     ),
   options: z.object({
-    location: z.enum(['frontmatter', 'content', 'both']).default('both'),
-    normalize: z.boolean().default(true),
-    position: z.enum(['start', 'end']).default('end'),
-    preserveChildren: z.boolean().default(false),
-    patterns: z.array(z.string()).default([])
+    location: z.enum(['frontmatter', 'content', 'both'])
+      .default('both')
+      .describe("Where to add/remove tags"),
+    normalize: z.boolean()
+      .default(true)
+      .describe("Whether to normalize tag format"),
+    position: z.enum(['start', 'end'])
+      .default('end')
+      .describe("Where to add inline tags in content"),
+    preserveChildren: z.boolean()
+      .default(false)
+      .describe("Whether to preserve child tags when removing parent tags"),
+    patterns: z.array(z.string())
+      .default([])
+      .describe("Tag patterns to match for removal (supports * wildcard)")
   }).default({
     location: 'both',
     normalize: true,
@@ -47,9 +58,10 @@ const ManageTagsSchema = z.object({
     preserveChildren: false,
     patterns: []
   })
-});
+}).strict();
 
-type TagOperation = z.infer<typeof ManageTagsSchema>;
+// Types
+type ManageTagsInput = z.infer<typeof schema>;
 
 interface OperationReport {
   success: string[];
@@ -72,9 +84,12 @@ interface OperationReport {
   };
 }
 
+// Create schema handler that provides both Zod validation and JSON Schema
+const schemaHandler = createSchemaHandler(schema);
+
 async function manageTags(
   vaultPath: string,
-  operation: TagOperation
+  operation: ManageTagsInput
 ): Promise<OperationReport> {
   const results: OperationReport = {
     success: [],
@@ -212,63 +227,36 @@ async function manageTags(
 export function createManageTagsTool(vaultPath: string): Tool {
   return {
     name: "manage-tags",
-    description: "Add or remove tags from notes, supporting both frontmatter and inline tags",
-    inputSchema: {
-      type: "object",
-      properties: {
-        files: {
-          type: "array",
-          items: { type: "string" },
-          description: "Array of note filenames to process"
-        },
-        operation: {
-          type: "string",
-          enum: ["add", "remove"],
-          description: "Whether to add or remove the specified tags"
-        },
-        tags: {
-          type: "array",
-          items: { type: "string" },
-          description: "Array of tags to add or remove"
-        },
-        options: {
-          type: "object",
-          properties: {
-            location: {
-              type: "string",
-              enum: ["frontmatter", "content", "both"],
-              description: "Where to add/remove tags"
-            },
-            normalize: {
-              type: "boolean",
-              description: "Whether to normalize tag format (e.g., ProjectActive -> project-active)"
-            },
-            position: {
-              type: "string",
-              enum: ["start", "end"],
-              description: "Where to add inline tags in content"
-            },
-            preserveChildren: {
-              type: "boolean",
-              description: "Whether to preserve child tags when removing parent tags"
-            },
-            patterns: {
-              type: "array",
-              items: { type: "string" },
-              description: "Tag patterns to match for removal (supports * wildcard)"
-            }
-          }
-        }
-      },
-      required: ["files", "operation", "tags"]
-    },
+    description: `Add or remove tags from notes, supporting both frontmatter and inline tags.
+
+Examples:
+- Add tags: { "files": ["note.md"], "operation": "add", "tags": ["project", "status/active"] }
+- Remove tags: { "files": ["note.md"], "operation": "remove", "tags": ["project"] }
+- With options: { "files": ["note.md"], "operation": "add", "tags": ["status"], "options": { "location": "frontmatter" } }
+- Pattern matching: { "files": ["note.md"], "operation": "remove", "options": { "patterns": ["status/*"] } }
+- INCORRECT: { "tags": ["#project"] } (don't include # symbol)`,
+    inputSchema: schemaHandler,
     handler: async (args) => {
       try {
         // Parse and validate input
-        const params = ManageTagsSchema.parse(args);
+        const parsed = schema.parse(args);
+        
+        // Ensure defaults are set
+        const validated = {
+          files: parsed.files,
+          operation: parsed.operation,
+          tags: parsed.tags,
+          options: {
+            location: parsed.options?.location ?? 'both',
+            normalize: parsed.options?.normalize ?? true,
+            position: parsed.options?.position ?? 'end',
+            preserveChildren: parsed.options?.preserveChildren ?? false,
+            patterns: parsed.options?.patterns ?? []
+          }
+        };
         
         // Execute tag management operation
-        const results = await manageTags(vaultPath, params);
+        const results = await manageTags(vaultPath, validated);
         
         // Format detailed response message
         let message = '';
@@ -325,7 +313,10 @@ export function createManageTagsTool(vaultPath: string): Tool {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          handleZodError(error);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
+          );
         }
         throw error;
       }

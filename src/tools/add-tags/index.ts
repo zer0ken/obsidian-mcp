@@ -1,11 +1,11 @@
 import { z } from "zod";
-import { Tool } from "../../types.js";
+import { Tool, TagOperationResult } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { validateVaultPath } from "../../utils/path.js";
 import { fileExists, safeReadFile } from "../../utils/files.js";
-import { handleFsError, handleZodError } from "../../utils/errors.js";
+import { handleFsError } from "../../utils/errors.js";
 import {
   validateTag,
   parseNote,
@@ -13,57 +13,59 @@ import {
   addTagsToFrontmatter,
   normalizeTag
 } from "../../utils/tags.js";
+import { createToolResponse, formatTagResult } from "../../utils/responses.js";
+import { createSchemaHandler } from "../../utils/schema.js";
 
-// Schema for tag addition operations
-const AddTagsSchema = z.object({
+// Input validation schema with descriptions
+const schema = z.object({
   files: z.array(z.string())
     .min(1, "At least one file must be specified")
     .refine(
       files => files.every(f => f.endsWith('.md')),
       "All files must have .md extension"
-    ),
+    )
+    .describe("Array of note filenames to process (must have .md extension)"),
   tags: z.array(z.string())
     .min(1, "At least one tag must be specified")
     .refine(
       tags => tags.every(validateTag),
       "Invalid tag format. Tags must contain only letters, numbers, and forward slashes for hierarchy."
-    ),
-  options: z.object({
-    location: z.enum(['frontmatter', 'content', 'both']).default('both'),
-    normalize: z.boolean().default(true),
-    position: z.enum(['start', 'end']).default('end')
-  }).default({
-    location: 'both',
-    normalize: true,
-    position: 'end'
-  })
-});
+    )
+    .describe("Array of tags to add (e.g., 'status/active', 'project/docs')"),
+  location: z.enum(['frontmatter', 'content', 'both'])
+    .optional()
+    .describe("Where to add tags (default: both)"),
+  normalize: z.boolean()
+    .optional()
+    .describe("Whether to normalize tag format (e.g., ProjectActive -> project-active) (default: true)"),
+  position: z.enum(['start', 'end'])
+    .optional()
+    .describe("Where to add inline tags in content (default: end)")
+}).strict();
 
-interface AddTagsReport {
-  success: string[];
-  errors: { file: string; error: string }[];
-  details: {
-    [filename: string]: {
-      addedTags: {
-        tag: string;
-        location: 'frontmatter' | 'content';
-      }[];
-    };
-  };
-}
+// Create schema handler that provides both Zod validation and JSON Schema
+const schemaHandler = createSchemaHandler(schema);
 
 async function addTags(
   vaultPath: string,
-  params: z.infer<typeof AddTagsSchema>
-): Promise<AddTagsReport> {
-  const results: AddTagsReport = {
-    success: [],
-    errors: [],
+  files: string[],
+  tags: string[],
+  location: 'frontmatter' | 'content' | 'both' = 'both',
+  normalize: boolean = true,
+  position: 'start' | 'end' = 'end'
+): Promise<TagOperationResult> {
+  const result: TagOperationResult = {
+    success: true,
+    message: "Tag addition completed",
+    successCount: 0,
+    totalCount: files.length,
+    failedItems: [],
     details: {}
   };
 
-  for (const filename of params.files) {
+  for (const filename of files) {
     const fullPath = path.join(vaultPath, filename);
+    result.details[filename] = { changes: [] };
     
     try {
       // Validate path is within vault
@@ -71,8 +73,8 @@ async function addTags(
       
       // Check if file exists
       if (!await fileExists(fullPath)) {
-        results.errors.push({
-          file: filename,
+        result.failedItems.push({
+          item: filename,
           error: "File not found"
         });
         continue;
@@ -81,8 +83,8 @@ async function addTags(
       // Read file content
       const content = await safeReadFile(fullPath);
       if (!content) {
-        results.errors.push({
-          file: filename,
+        result.failedItems.push({
+          item: filename,
           error: "Failed to read file"
         });
         continue;
@@ -91,16 +93,13 @@ async function addTags(
       // Parse the note
       const parsed = parseNote(content);
       let modified = false;
-      results.details[filename] = {
-        addedTags: []
-      };
 
       // Handle frontmatter tags
-      if (params.options.location !== 'content') {
+      if (location !== 'content') {
         const updatedFrontmatter = addTagsToFrontmatter(
           parsed.frontmatter,
-          params.tags,
-          params.options.normalize
+          tags,
+          normalize
         );
         
         if (JSON.stringify(parsed.frontmatter) !== JSON.stringify(updatedFrontmatter)) {
@@ -108,10 +107,10 @@ async function addTags(
           parsed.hasFrontmatter = true;
           modified = true;
           
-          // Record added tags
-          params.tags.forEach(tag => {
-            results.details[filename].addedTags.push({
-              tag: params.options.normalize ? normalizeTag(tag) : tag,
+          // Record changes
+          tags.forEach((tag: string) => {
+            result.details[filename].changes.push({
+              tag: normalize ? normalizeTag(tag) : tag,
               location: 'frontmatter'
             });
           });
@@ -119,24 +118,24 @@ async function addTags(
       }
 
       // Handle inline tags
-      if (params.options.location !== 'frontmatter') {
-        const tagString = params.tags
+      if (location !== 'frontmatter') {
+        const tagString = tags
           .filter(tag => validateTag(tag))
-          .map(tag => `#${params.options.normalize ? normalizeTag(tag) : tag}`)
+          .map((tag: string) => `#${normalize ? normalizeTag(tag) : tag}`)
           .join(' ');
 
         if (tagString) {
-          if (params.options.position === 'start') {
+          if (position === 'start') {
             parsed.content = tagString + '\n\n' + parsed.content.trim();
           } else {
             parsed.content = parsed.content.trim() + '\n\n' + tagString;
           }
           modified = true;
           
-          // Record added tags
-          params.tags.forEach(tag => {
-            results.details[filename].addedTags.push({
-              tag: params.options.normalize ? normalizeTag(tag) : tag,
+          // Record changes
+          tags.forEach((tag: string) => {
+            result.details[filename].changes.push({
+              tag: normalize ? normalizeTag(tag) : tag,
               location: 'content'
             });
           });
@@ -147,108 +146,49 @@ async function addTags(
       if (modified) {
         const updatedContent = stringifyNote(parsed);
         await fs.writeFile(fullPath, updatedContent);
-        results.success.push(filename);
+        result.successCount++;
       }
     } catch (error) {
-      results.errors.push({
-        file: filename,
+      result.failedItems.push({
+        item: filename,
         error: error instanceof Error ? error.message : 'Unknown error'
       });
     }
   }
 
-  return results;
+  // Update success status based on results
+  result.success = result.failedItems.length === 0;
+  result.message = result.success 
+    ? `Successfully added tags to ${result.successCount} files`
+    : `Completed with ${result.failedItems.length} errors`;
+
+  return result;
 }
 
 export function createAddTagsTool(vaultPath: string): Tool {
   return {
     name: "add-tags",
-    description: "Add tags to notes in frontmatter and/or content",
-    inputSchema: {
-      type: "object",
-      properties: {
-        files: {
-          type: "array",
-          items: { type: "string" },
-          description: "Array of note filenames to process"
-        },
-        tags: {
-          type: "array",
-          items: { type: "string" },
-          description: "Array of tags to add"
-        },
-        options: {
-          type: "object",
-          properties: {
-            location: {
-              type: "string",
-              enum: ["frontmatter", "content", "both"],
-              description: "Where to add tags"
-            },
-            normalize: {
-              type: "boolean",
-              description: "Whether to normalize tag format (e.g., ProjectActive -> project-active)"
-            },
-            position: {
-              type: "string",
-              enum: ["start", "end"],
-              description: "Where to add inline tags in content"
-            }
-          }
-        }
-      },
-      required: ["files", "tags"]
-    },
+    description: `Add tags to notes in frontmatter and/or content.
+
+Examples:
+- Add to both locations: { "files": ["note.md"], "tags": ["status/active"] }
+- Add to frontmatter only: { "files": ["note.md"], "tags": ["project/docs"], "location": "frontmatter" }
+- Add to start of content: { "files": ["note.md"], "tags": ["type/meeting"], "location": "content", "position": "start" }`,
+    inputSchema: schemaHandler,
     handler: async (args) => {
       try {
-        // Parse and validate input
-        const params = AddTagsSchema.parse(args);
+        const validated = schemaHandler.parse(args);
+        const { files, tags, location = 'both', normalize = true, position = 'end' } = validated;
         
-        // Execute tag addition
-        const results = await addTags(vaultPath, params);
+        const result = await addTags(vaultPath, files, tags, location, normalize, position);
         
-        // Format response message
-        let message = '';
-        
-        // Add success summary
-        if (results.success.length > 0) {
-          message += `Successfully added tags to: ${results.success.join(', ')}\n\n`;
-        }
-        
-        // Add detailed changes for each file
-        for (const [filename, details] of Object.entries(results.details)) {
-          if (details.addedTags.length > 0) {
-            message += `Changes in ${filename}:\n`;
-            const byLocation = details.addedTags.reduce((acc, change) => {
-              if (!acc[change.location]) acc[change.location] = new Set();
-              acc[change.location].add(change.tag);
-              return acc;
-            }, {} as Record<string, Set<string>>);
-            
-            for (const [location, tags] of Object.entries(byLocation)) {
-              message += `  ${location}: ${Array.from(tags).join(', ')}\n`;
-            }
-            message += '\n';
-          }
-        }
-        
-        // Add errors if any
-        if (results.errors.length > 0) {
-          message += 'Errors:\n';
-          results.errors.forEach(error => {
-            message += `  ${error.file}: ${error.error}\n`;
-          });
-        }
-
-        return {
-          content: [{
-            type: "text",
-            text: message.trim()
-          }]
-        };
+        return createToolResponse(formatTagResult(result));
       } catch (error) {
         if (error instanceof z.ZodError) {
-          handleZodError(error);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
+          );
         }
         throw error;
       }

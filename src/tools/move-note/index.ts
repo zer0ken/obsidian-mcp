@@ -6,17 +6,25 @@ import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js";
 import { fileExists, ensureDirectory } from "../../utils/files.js";
 import { updateVaultLinks } from "../../utils/links.js";
-import { createNoteExistsError, createNoteNotFoundError, handleFsError, handleZodError } from "../../utils/errors.js";
+import { createNoteExistsError, createNoteNotFoundError, handleFsError } from "../../utils/errors.js";
+import { createSchemaHandler } from "../../utils/schema.js";
 
-// Schema for move note operation
-export const MoveNoteSchema = z.object({
+// Input validation schema with descriptions
+const schema = z.object({
   source: z.string()
     .min(1, "Source path cannot be empty")
-    .refine(name => !path.isAbsolute(name), "Source must be a relative path"),
+    .refine(name => !path.isAbsolute(name), 
+      "Source must be a relative path within the vault")
+    .describe("Source path of the note relative to vault root (e.g., 'folder/note.md')"),
   destination: z.string()
     .min(1, "Destination path cannot be empty")
-    .refine(name => !path.isAbsolute(name), "Destination must be a relative path")
-});
+    .refine(name => !path.isAbsolute(name), 
+      "Destination must be a relative path within the vault")
+    .describe("Destination path relative to vault root (e.g., 'new-folder/new-name.md')")
+}).strict();
+
+// Create schema handler that provides both Zod validation and JSON Schema
+const schemaHandler = createSchemaHandler(schema);
 
 async function moveNote(
   vaultPath: string,
@@ -70,23 +78,11 @@ export function createMoveNoteTool(vaultPath: string): Tool {
   return {
     name: "move-note",
     description: "Move/rename a note while preserving links",
-    inputSchema: {
-      type: "object",
-      properties: {
-        source: {
-          type: "string",
-          description: "Source path of the note relative to vault root (e.g., 'folder/note.md')"
-        },
-        destination: {
-          type: "string",
-          description: "Destination path relative to vault root (e.g., 'new-folder/new-name.md')"
-        }
-      },
-      required: ["source", "destination"]
-    },
+    inputSchema: schemaHandler,
     handler: async (args) => {
       try {
-        const { source, destination } = MoveNoteSchema.parse(args);
+        const validated = schemaHandler.parse(args);
+        const { source, destination } = validated;
         
         // Ensure .md extension
         const sourcePath = ensureMarkdownExtension(source);
@@ -104,7 +100,10 @@ export function createMoveNoteTool(vaultPath: string): Tool {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          handleZodError(error);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
+          );
         }
         throw error;
       }

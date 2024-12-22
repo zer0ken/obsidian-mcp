@@ -16,26 +16,37 @@ import {
   isParentTag,
   getRelatedTags
 } from "../../utils/tags.js";
+import { createSchemaHandler } from "../../utils/schema.js";
 
-// Schema for tag removal operations
-const RemoveTagsSchema = z.object({
+// Input validation schema with descriptions
+const schema = z.object({
   files: z.array(z.string())
     .min(1, "At least one file must be specified")
     .refine(
       files => files.every(f => f.endsWith('.md')),
       "All files must have .md extension"
-    ),
+    )
+    .describe("Array of note filenames to process (must have .md extension)"),
   tags: z.array(z.string())
     .min(1, "At least one tag must be specified")
     .refine(
       tags => tags.every(tag => /^[a-zA-Z0-9\/]+$/.test(tag)),
       "Tags must contain only letters, numbers, and forward slashes. Do not include the # symbol. Examples: 'project', 'work/active', 'tasks/2024/q1'"
-    ),
+    )
+    .describe("Array of tags to remove (without # symbol). Example: ['project', 'work/active']"),
   options: z.object({
-    location: z.enum(['frontmatter', 'content', 'both']).default('both'),
-    normalize: z.boolean().default(true),
-    preserveChildren: z.boolean().default(false),
-    patterns: z.array(z.string()).default([])
+    location: z.enum(['frontmatter', 'content', 'both'])
+      .default('both')
+      .describe("Where to remove tags from (default: both)"),
+    normalize: z.boolean()
+      .default(true)
+      .describe("Whether to normalize tag format (e.g., ProjectActive -> project-active) (default: true)"),
+    preserveChildren: z.boolean()
+      .default(false)
+      .describe("Whether to preserve child tags when removing parent tags (default: false)"),
+    patterns: z.array(z.string())
+      .default([])
+      .describe("Tag patterns to match for removal (supports * wildcard) (default: [])")
   }).default({
     location: 'both',
     normalize: true,
@@ -65,9 +76,11 @@ interface RemoveTagsReport {
   };
 }
 
+type RemoveTagsInput = z.infer<typeof schema>;
+
 async function removeTags(
   vaultPath: string,
-  params: z.infer<typeof RemoveTagsSchema>
+  params: RemoveTagsInput
 ): Promise<RemoveTagsReport> {
   const results: RemoveTagsReport = {
     success: [],
@@ -168,6 +181,9 @@ async function removeTags(
   return results;
 }
 
+// Create schema handler that provides both Zod validation and JSON Schema
+const schemaHandler = createSchemaHandler(schema);
+
 export function createRemoveTagsTool(vaultPath: string): Tool {
   if (!vaultPath) {
     throw new Error("Vault path is required");
@@ -175,57 +191,33 @@ export function createRemoveTagsTool(vaultPath: string): Tool {
   return {
     name: "remove-tags",
     description: `Remove tags from notes in frontmatter and/or content.
+
 Examples:
 - Simple: { "files": ["note.md"], "tags": ["project", "status"] }
 - With hierarchy: { "files": ["note.md"], "tags": ["work/active", "priority/high"] }
 - With options: { "files": ["note.md"], "tags": ["status"], "options": { "location": "frontmatter" } }
+- Pattern matching: { "files": ["note.md"], "options": { "patterns": ["status/*"] } }
 - INCORRECT: { "tags": ["#project"] } (don't include # symbol)`,
-    inputSchema: {
-      type: "object",
-      properties: {
-        files: {
-          type: "array",
-          items: { type: "string" },
-          description: "Array of note filenames to process",
-        },
-        tags: {
-          type: "array",
-          items: { type: "string" },
-          description: "Array of tags to remove (without # symbol). Example: ['project', 'work/active']"
-        },
-        options: {
-          type: "object",
-          properties: {
-            location: {
-              type: "string",
-              enum: ["frontmatter", "content", "both"],
-              description: "Where to remove tags from"
-            },
-            normalize: {
-              type: "boolean",
-              description: "Whether to normalize tag format (e.g., ProjectActive -> project-active)"
-            },
-            preserveChildren: {
-              type: "boolean",
-              description: "Whether to preserve child tags when removing parent tags"
-            },
-            patterns: {
-              type: "array",
-              items: { type: "string" },
-              description: "Tag patterns to match for removal (supports * wildcard)"
-            }
-          }
-        }
-      },
-      required: ["files", "tags"]
-    },
+    inputSchema: schemaHandler,
     handler: async (args) => {
       try {
         // Parse and validate input
-        const params = RemoveTagsSchema.parse(args);
+        const parsed = schemaHandler.parse(args);
+        
+        // Ensure defaults are set
+        const validated = {
+          files: parsed.files,
+          tags: parsed.tags,
+          options: {
+            location: parsed.options?.location ?? 'both',
+            normalize: parsed.options?.normalize ?? true,
+            preserveChildren: parsed.options?.preserveChildren ?? false,
+            patterns: parsed.options?.patterns ?? []
+          }
+        };
         
         // Execute tag removal
-        const results = await removeTags(vaultPath, params);
+        const results = await removeTags(vaultPath, validated);
         
         // Format detailed response message
         let message = '';
@@ -310,7 +302,10 @@ Examples:
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          handleZodError(error);
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
+          );
         }
         throw error;
       }
