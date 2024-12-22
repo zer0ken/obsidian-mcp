@@ -2,7 +2,10 @@ import { z } from "zod";
 import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js";
+import { ensureDirectory, fileExists } from "../../utils/files.js";
+import { createNoteExistsError, handleFsError, handleZodError } from "../../utils/errors.js";
 
 // Improved schema with better validation
 export const CreateNoteSchema = z.object({
@@ -24,51 +27,33 @@ async function createNote(
   content: string, 
   folder?: string
 ): Promise<string> {
-  const sanitizedFilename = filename.endsWith('.md') ? filename : `${filename}.md`;
+  const sanitizedFilename = ensureMarkdownExtension(filename);
   
   const notePath = folder 
     ? path.join(vaultPath, folder, sanitizedFilename)
     : path.join(vaultPath, sanitizedFilename);
 
   // Validate path is within vault
-  const normalizedNotePath = path.normalize(notePath);
-  if (!normalizedNotePath.startsWith(path.normalize(vaultPath))) {
-    throw new McpError(
-      ErrorCode.InvalidRequest,
-      "Note path must be within the vault directory"
-    );
-  }
+  validateVaultPath(vaultPath, notePath);
 
   try {
     // Create directory structure if needed
-    const noteDir = path.dirname(normalizedNotePath);
-    await fs.mkdir(noteDir, { recursive: true });
+    const noteDir = path.dirname(notePath);
+    await ensureDirectory(noteDir);
 
     // Check if file exists first
-    try {
-      await fs.access(normalizedNotePath);
-      throw new McpError(
-        ErrorCode.InvalidRequest,
-        `A note already exists at: ${normalizedNotePath}\n\n` +
-        'To prevent accidental modifications, this operation has been cancelled.\n' +
-        'If you want to modify an existing note, please explicitly request to edit or replace it.'
-      );
-    } catch (error: any) {
-      if (error.code !== 'ENOENT') {
-        throw error;
-      }
-      // File doesn't exist, proceed with creation
-      await fs.writeFile(normalizedNotePath, content, 'utf8');
-      return normalizedNotePath;
+    if (await fileExists(notePath)) {
+      throw createNoteExistsError(notePath);
     }
-  } catch (error: any) {
+
+    // File doesn't exist, proceed with creation
+    await fs.writeFile(notePath, content, 'utf8');
+    return notePath;
+  } catch (error) {
     if (error instanceof McpError) {
       throw error;
     }
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Failed to create note: ${error.message}`
-    );
+    throw handleFsError(error, 'create note');
   }
 }
 
@@ -113,10 +98,7 @@ export function createCreateNoteTool(vaultPath: string): Tool {
         };
       } catch (error) {
         if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
+          handleZodError(error);
         }
         throw error;
       }

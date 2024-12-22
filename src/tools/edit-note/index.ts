@@ -3,6 +3,9 @@ import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { validateVaultPath } from "../../utils/path.js";
+import { fileExists } from "../../utils/files.js";
+import { createNoteNotFoundError, handleFsError, handleZodError } from "../../utils/errors.js";
 
 // Improved schema with more precise validation
 export const EditNoteSchema = z.object({
@@ -46,9 +49,15 @@ async function editNote(
 ): Promise<string> {
   const fullPath = path.join(vaultPath, filename);
   
+  // Validate path is within vault
+  validateVaultPath(vaultPath, fullPath);
+
   try {
     switch (operation) {
       case 'delete': {
+        if (!await fileExists(fullPath)) {
+          throw createNoteNotFoundError(filename);
+        }
         await fs.unlink(fullPath);
         return `Successfully deleted note: ${filename}`;
       }
@@ -57,16 +66,8 @@ async function editNote(
       case 'prepend':
       case 'replace': {
         // Check if file exists for non-delete operations
-        try {
-          await fs.access(fullPath);
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            throw new McpError(
-              ErrorCode.InvalidRequest,
-              `Note "${filename}" not found in vault`
-            );
-          }
-          throw error;
+        if (!await fileExists(fullPath)) {
+          throw createNoteNotFoundError(filename);
         }
 
         // Read existing content
@@ -100,34 +101,7 @@ async function editNote(
     if (error instanceof McpError) {
       throw error;
     }
-    
-    // Enhanced error handling
-    if (error instanceof Error) {
-      const errMsg = error.message || 'Unknown error occurred';
-      const nodeError = error as NodeJS.ErrnoException;
-      
-      if (nodeError.code === 'EACCES') {
-        throw new McpError(
-          ErrorCode.InvalidRequest,
-          `Permission denied: Cannot access ${filename}`
-        );
-      }
-      if (nodeError.code === 'ENOSPC') {
-        throw new McpError(
-          ErrorCode.InternalError,
-          'Not enough space to write file'
-        );
-      }
-      throw new McpError(
-        ErrorCode.InternalError,
-        `Failed to ${operation} note: ${errMsg}`
-      );
-    }
-    
-    throw new McpError(
-      ErrorCode.InternalError,
-      `Unexpected error while ${operation}ing note`
-    );
+    throw handleFsError(error, `${operation} note`);
   }
 }
 
@@ -155,21 +129,28 @@ export function createEditNoteTool(vaultPath: string): Tool {
       required: ["path", "operation"]
     },
     handler: async (args) => {
-      // Parse and validate input
-      const { path: notePath, operation, content } = EditNoteSchema.parse(args);
-      
-      // Execute the edit operation
-      const resultMessage = await editNote(vaultPath, notePath, operation, content);
-      
-      // Return a more informative response
-      return {
-        content: [
-          {
-            type: "text",
-            text: resultMessage
-          }
-        ]
-      };
+      try {
+        // Parse and validate input
+        const { path: notePath, operation, content } = EditNoteSchema.parse(args);
+        
+        // Execute the edit operation
+        const resultMessage = await editNote(vaultPath, notePath, operation, content);
+        
+        // Return a more informative response
+        return {
+          content: [
+            {
+              type: "text",
+              text: resultMessage
+            }
+          ]
+        };
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          handleZodError(error);
+        }
+        throw error;
+      }
     }
   };
 }

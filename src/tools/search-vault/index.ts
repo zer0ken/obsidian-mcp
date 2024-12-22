@@ -2,6 +2,10 @@ import { z } from "zod";
 import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
+import { validateVaultPath } from "../../utils/path.js";
+import { getAllMarkdownFiles } from "../../utils/files.js";
+import { handleFsError, handleZodError } from "../../utils/errors.js";
 
 // Improved schema with better validation
 export const SearchSchema = z.object({
@@ -18,45 +22,6 @@ type SearchResult = {
   }>;
 };
 
-async function checkPathSafety(basePath: string, targetPath: string): Promise<boolean> {
-  const resolvedPath = path.resolve(targetPath);
-  const resolvedBasePath = path.resolve(basePath);
-  return resolvedPath.startsWith(resolvedBasePath);
-}
-
-async function getAllMarkdownFiles(vaultPath: string, dir = vaultPath): Promise<string[]> {
-  try {
-    const files: string[] = [];
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      
-      // First check if the path is safe
-      if (!await checkPathSafety(vaultPath, fullPath)) {
-        console.error(`Skipping path outside vault: ${fullPath}`);
-        continue;
-      }
-
-      try {
-        if (entry.isDirectory() && !entry.name.startsWith(".")) {
-          files.push(...await getAllMarkdownFiles(vaultPath, fullPath));
-        } else if (entry.isFile() && entry.name.endsWith(".md")) {
-          files.push(fullPath);
-        }
-      } catch (err) {
-        console.error(`Error processing ${fullPath}:`, err);
-        // Continue with other files
-      }
-    }
-
-    return files;
-  } catch (err) {
-    console.error(`Error reading directory ${dir}:`, err);
-    return [];
-  }
-}
-
 async function searchVault(
   vaultPath: string,
   query: string,
@@ -67,9 +32,7 @@ async function searchVault(
     const searchDir = searchPath ? path.join(vaultPath, searchPath) : vaultPath;
     
     // Validate the search directory is within vault
-    if (!await checkPathSafety(vaultPath, searchDir)) {
-      throw new Error("Search path is outside the vault directory");
-    }
+    validateVaultPath(vaultPath, searchDir);
 
     const files = await getAllMarkdownFiles(vaultPath, searchDir);
     const results: SearchResult[] = [];
@@ -104,9 +67,11 @@ async function searchVault(
     }
 
     return results;
-  } catch (err) {
-    console.error("Error in searchVault:", err);
-    throw new Error(`Search failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+  } catch (error) {
+    if (error instanceof McpError) {
+      throw error;
+    }
+    throw handleFsError(error, 'search vault');
   }
 }
 
@@ -131,13 +96,6 @@ function formatSearchResults(results: SearchResult[]): string {
 export function createSearchVaultTool(vaultPath: string): Tool {
   if (!vaultPath) {
     throw new Error("Vault path is required");
-  }
-
-  // Validate vault path exists and is accessible
-  try {
-    fs.access(vaultPath);
-  } catch (err) {
-    throw new Error(`Invalid vault path: ${err instanceof Error ? err.message : 'Unknown error'}`);
   }
 
   return {
@@ -172,15 +130,11 @@ export function createSearchVaultTool(vaultPath: string): Tool {
             text: formatSearchResults(results)
           }]
         };
-      } catch (err) {
-        // Proper error handling for MCP tool response
-        return {
-          isError: true,
-          content: [{
-            type: "text",
-            text: `Error: ${err instanceof Error ? err.message : 'An unknown error occurred'}`
-          }]
-        };
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          handleZodError(error);
+        }
+        throw error;
       }
     }
   };
