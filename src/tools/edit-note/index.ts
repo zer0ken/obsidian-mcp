@@ -4,51 +4,130 @@ import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
+// Improved schema with more precise validation
 export const EditNoteSchema = z.object({
-  path: z.string(),
+  path: z.string()
+    .min(1, "Filename cannot be empty")
+    .refine(
+      name => !name.includes('/') && !name.includes('\\'),
+      "Please provide only the filename without any path separators"
+    )
+    .refine(
+      name => name.endsWith('.md'),
+      "Note must have .md extension"
+    ),
   operation: z.enum(['append', 'prepend', 'replace', 'delete']),
   content: z.string().optional()
+    .superRefine((content, ctx) => {
+      const operation = (ctx.path[0] as any).operation;
+      if (operation === 'delete') {
+        if (content !== undefined) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "Content should not be provided for delete operation"
+          });
+        }
+      } else if (!content) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Content is required for non-delete operations"
+        });
+      }
+    })
 });
 
-async function editNote(vaultPath: string, notePath: string, operation: string, content?: string): Promise<void> {
-  // Ensure we're only working with the filename
-  const filename = path.basename(notePath);
+type EditOperation = z.infer<typeof EditNoteSchema>['operation'];
+
+async function editNote(
+  vaultPath: string, 
+  filename: string, 
+  operation: EditOperation,
+  content?: string
+): Promise<string> {
   const fullPath = path.join(vaultPath, filename);
-
+  
   try {
-    if (operation === "delete") {
-      await fs.unlink(fullPath);
-      return;
-    }
-
-    const existingContent = await fs.readFile(fullPath, "utf-8");
-    let newContent: string;
-
-    if (operation !== "delete" && !content) {
-      throw new McpError(ErrorCode.InvalidParams, `Content is required for ${operation} operation`);
-    }
-
     switch (operation) {
-      case "append":
-        newContent = `${existingContent}\n${content as string}`;
-        break;
-      case "prepend":
-        newContent = `${content as string}\n${existingContent}`;
-        break;
-      case "replace":
-        newContent = content as string;
-        break;
-      default:
-        throw new McpError(ErrorCode.InvalidParams, `Invalid operation: ${operation}`);
-    }
+      case 'delete': {
+        await fs.unlink(fullPath);
+        return `Successfully deleted note: ${filename}`;
+      }
+      
+      case 'append':
+      case 'prepend':
+      case 'replace': {
+        // Check if file exists for non-delete operations
+        try {
+          await fs.access(fullPath);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            throw new McpError(
+              ErrorCode.InvalidRequest,
+              `Note "${filename}" not found in vault`
+            );
+          }
+          throw error;
+        }
 
-    await fs.writeFile(fullPath, newContent);
-  } catch (error: any) {
-    if (error.code === "ENOENT") {
-      throw new McpError(ErrorCode.InvalidRequest, 
-        `Note "${filename}" not found. Please provide only the filename without any path.`);
+        // Read existing content
+        const existingContent = await fs.readFile(fullPath, "utf-8");
+        
+        // Prepare new content based on operation
+        let newContent: string;
+        if (operation === 'append') {
+          newContent = existingContent.trim() + (existingContent.trim() ? '\n\n' : '') + content;
+        } else if (operation === 'prepend') {
+          newContent = content + (existingContent.trim() ? '\n\n' : '') + existingContent.trim();
+        } else {
+          // replace
+          newContent = content as string;
+        }
+
+        // Write the new content
+        await fs.writeFile(fullPath, newContent);
+        return `Successfully ${operation}ed note: ${filename}`;
+      }
+      
+      default: {
+        const _exhaustiveCheck: never = operation;
+        throw new McpError(
+          ErrorCode.InvalidParams,
+          `Invalid operation: ${operation}`
+        );
+      }
     }
-    throw new McpError(ErrorCode.InternalError, `Failed to ${operation} note: ${error.message}`);
+  } catch (error) {
+    if (error instanceof McpError) {
+      throw error;
+    }
+    
+    // Enhanced error handling
+    if (error instanceof Error) {
+      const errMsg = error.message || 'Unknown error occurred';
+      const nodeError = error as NodeJS.ErrnoException;
+      
+      if (nodeError.code === 'EACCES') {
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `Permission denied: Cannot access ${filename}`
+        );
+      }
+      if (nodeError.code === 'ENOSPC') {
+        throw new McpError(
+          ErrorCode.InternalError,
+          'Not enough space to write file'
+        );
+      }
+      throw new McpError(
+        ErrorCode.InternalError,
+        `Failed to ${operation} note: ${errMsg}`
+      );
+    }
+    
+    throw new McpError(
+      ErrorCode.InternalError,
+      `Unexpected error while ${operation}ing note`
+    );
   }
 }
 
@@ -76,20 +155,18 @@ export function createEditNoteTool(vaultPath: string): Tool {
       required: ["path", "operation"]
     },
     handler: async (args) => {
+      // Parse and validate input
       const { path: notePath, operation, content } = EditNoteSchema.parse(args);
       
-      // Add validation to ensure only filename is provided
-      if (notePath.includes('/') || notePath.includes('\\')) {
-        throw new McpError(ErrorCode.InvalidRequest, 
-          `Please provide only the filename (e.g., "note.md") rather than a path with directories`);
-      }
+      // Execute the edit operation
+      const resultMessage = await editNote(vaultPath, notePath, operation, content);
       
-      await editNote(vaultPath, notePath, operation, content);
+      // Return a more informative response
       return {
         content: [
           {
             type: "text",
-            text: `Successfully ${operation}ed note: ${notePath}`
+            text: resultMessage
           }
         ]
       };
