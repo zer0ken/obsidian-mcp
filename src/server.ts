@@ -8,7 +8,7 @@ import {
   McpError,
   ErrorCode
 } from "@modelcontextprotocol/sdk/types.js";
-import { Tool, ToolProvider } from "./types.js";
+import { Tool } from "./types.js";
 import { z } from "zod";
 import { promises as fs } from "fs";
 import path from "path";
@@ -36,10 +36,8 @@ export class ObsidianServer {
     this.setupHandlers();
   }
 
-  registerToolProvider(provider: ToolProvider) {
-    for (const tool of provider.getTools()) {
-      this.tools.set(tool.name, tool);
-    }
+  registerTool(tool: Tool) {
+    this.tools.set(tool.name, tool);
   }
 
   private setupHandlers() {

@@ -13,7 +13,3 @@ export interface Tool {
     }>;
   }>;
 }
-
-export interface ToolProvider {
-  getTools(): Tool[];
-}

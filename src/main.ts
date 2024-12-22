@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { ObsidianServer } from "./server.js";
-import { NoteTools } from "./tools/note-tools.js";
-import { SearchTools } from "./tools/search-tools.js";
+import { createCreateNoteTool } from "./tools/create-note/index.js";
+import { createEditNoteTool } from "./tools/edit-note/index.js";
+import { createSearchVaultTool } from "./tools/search-vault/index.js";
 
 async function main() {
   const vaultPath = process.argv[2];
@@ -13,9 +14,10 @@ async function main() {
   try {
     const server = new ObsidianServer(vaultPath);
     
-    // Register tool providers
-    server.registerToolProvider(new NoteTools(vaultPath));
-    server.registerToolProvider(new SearchTools(vaultPath));
+    // Register tools
+    server.registerTool(createCreateNoteTool(vaultPath));
+    server.registerTool(createEditNoteTool(vaultPath));
+    server.registerTool(createSearchVaultTool(vaultPath));
 
     await server.start();
   } catch (error) {
