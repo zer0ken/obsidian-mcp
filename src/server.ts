@@ -6,8 +6,10 @@ import {
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
   McpError,
-  ErrorCode
+  ErrorCode,
+  Request
 } from "@modelcontextprotocol/sdk/types.js";
+import { RateLimiter, ConnectionMonitor, validateMessageSize } from "./utils/security.js";
 import { Tool } from "./types.js";
 import { z } from "zod";
 import { promises as fs } from "fs";
@@ -45,6 +47,8 @@ export class ObsidianServer {
   private server: Server;
   private tools: Map<string, Tool<any>> = new Map();
   private vaultPath: string;
+  private rateLimiter: RateLimiter;
+  private connectionMonitor: ConnectionMonitor;
 
   constructor(vaultPath: string) {
     // Normalize and resolve vault path
@@ -63,25 +67,62 @@ export class ObsidianServer {
       }
     );
 
+    // Initialize security features
+    this.rateLimiter = new RateLimiter();
+    this.connectionMonitor = new ConnectionMonitor();
+
     this.setupHandlers();
+
+    // Setup connection monitoring
+    this.connectionMonitor.start(() => {
+      console.error("Connection timeout detected");
+      this.server.close();
+    });
+
+    // Setup error handler
+    this.server.onerror = (error) => {
+      console.error("Server error:", error);
+    };
   }
 
   registerTool<T>(tool: Tool<T>) {
     this.tools.set(tool.name, tool);
   }
 
+  private validateRequest(request: any) {
+    try {
+      // Validate message size
+      validateMessageSize(request);
+
+      // Update connection activity
+      this.connectionMonitor.updateActivity();
+
+      // Check rate limit (using method name as client id for basic implementation)
+      if (!this.rateLimiter.checkLimit(request.method)) {
+        throw new McpError(ErrorCode.InvalidRequest, "Rate limit exceeded");
+      }
+    } catch (error) {
+      console.error("Request validation failed:", error);
+      throw error;
+    }
+  }
+
   private setupHandlers() {
     // List available tools
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
-      tools: Array.from(this.tools.values()).map(tool => ({
-        name: tool.name,
-        description: tool.description,
-        inputSchema: tool.inputSchema.jsonSchema
-      }))
-    }));
+    this.server.setRequestHandler(ListToolsRequestSchema, async (request) => {
+      this.validateRequest(request);
+      return {
+        tools: Array.from(this.tools.values()).map(tool => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema.jsonSchema
+        }))
+      };
+    });
 
     // List available resources
-    this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
+      this.validateRequest(request);
       const resources = await listNoteResources(this.vaultPath);
       const templates = getNoteResourceTemplates();
       
@@ -93,6 +134,7 @@ export class ObsidianServer {
 
     // Read resource content
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+      this.validateRequest(request);
       const uri = request.params?.uri;
       if (!uri || typeof uri !== 'string') {
         throw new McpError(ErrorCode.InvalidParams, "Missing or invalid URI parameter");
@@ -110,6 +152,7 @@ export class ObsidianServer {
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+      this.validateRequest(request);
       const params = request.params;
       if (!params || typeof params !== 'object') {
         throw new McpError(ErrorCode.InvalidParams, "Invalid request parameters");
@@ -174,5 +217,11 @@ export class ObsidianServer {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
     console.error("Obsidian MCP Server running on stdio");
+  }
+
+  async stop() {
+    this.connectionMonitor.stop();
+    await this.server.close();
+    console.error("Obsidian MCP Server stopped");
   }
 }
