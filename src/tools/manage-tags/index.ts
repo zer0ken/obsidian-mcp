@@ -37,7 +37,7 @@ const schema = z.object({
     ),
   options: z.object({
     location: z.enum(['frontmatter', 'content', 'both'])
-      .default('both')
+      .default('frontmatter')
       .describe("Where to add/remove tags"),
     normalize: z.boolean()
       .default(true)
