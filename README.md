@@ -17,8 +17,43 @@ This MCP has read and write access (if you allow it). Please. PLEASE backup your
 
 ## Requirements
 
-- Node.js 16 or higher
+- Node.js 20 or higher (might work on lower, but I haven't tested it)
 - An Obsidian vault
+
+## Install
+Add to your Claude Desktop configuration:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+    "mcpServers": {
+        "obsidian": {
+            "command": "npx",
+            "args": ["-y", "obsidian-mcp", "/path/to/your/vault"]
+        }
+    }
+}
+```
+
+Replace `/path/to/your/vault` with the absolute path to your Obsidian vault. For example:
+
+MacOS/Linux:
+```json
+"/Users/username/Documents/MyVault"
+```
+
+Windows:
+```json
+"C:\\Users\\username\\Documents\\MyVault"
+```
+
+Restart Claude for Desktop after saving the configuration. You should see the hammer icon appear, indicating the server is connected.
+
+If you have connection issues, check the logs at:
+- MacOS: `~/Library/Logs/Claude/mcp*.log`
+- Windows: `%APPDATA%\Claude\logs\mcp*.log`
 
 ## Development
 
@@ -33,22 +68,16 @@ npm install
 # Build
 npm run build
 ```
-
-## Usage
-
-Add to your Claude Desktop configuration:
-
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+Then add to your Claude Desktop configuration:
 
 ```json
 {
-  "mcpServers": {
-    "obsidian": {
-      "command": "npx",
-      "args": ["-y", "obsidian-mcp", "/path/to/your/vault"]
+    "mcpServers": {
+        "obsidian": {
+            "command": "node",
+            "args": ["<absolute-path-to-obsidian-mcp>/build/main.js", "/path/to/your/vault"]
+        }
     }
-  }
 }
 ```
 
