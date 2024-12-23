@@ -13,6 +13,11 @@ import { z } from "zod";
 import { promises as fs } from "fs";
 import path from "path";
 import os from 'os';
+import {
+  listNoteResources,
+  getNoteResourceTemplates,
+  readNoteResource
+} from "./utils/resources.js";
 
 // Utility function to expand home directory
 function expandHome(filepath: string): string {
@@ -66,6 +71,7 @@ export class ObsidianServer {
   }
 
   private setupHandlers() {
+    // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: Array.from(this.tools.values()).map(tool => ({
         name: tool.name,
@@ -74,37 +80,32 @@ export class ObsidianServer {
       }))
     }));
 
+    // List available resources
     this.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-      const files = await this.getAllMarkdownFiles();
+      const resources = await listNoteResources(this.vaultPath);
+      const templates = getNoteResourceTemplates();
+      
       return {
-        resources: files.map(file => ({
-          uri: `file://${file}`,
-          name: path.basename(file),
-          mimeType: "text/markdown"
-        }))
+        resources,
+        resourceTemplates: templates
       };
     });
 
+    // Read resource content
     this.server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
       const uri = request.params?.uri;
       if (!uri || typeof uri !== 'string') {
         throw new McpError(ErrorCode.InvalidParams, "Missing or invalid URI parameter");
       }
-      const filePath = uri.replace("file://", "");
-      
+
       try {
-        const content = await fs.readFile(filePath, "utf-8");
+        const result = await readNoteResource(this.vaultPath, uri);
         return {
-          contents: [
-            {
-              uri,
-              mimeType: "text/markdown",
-              text: content
-            }
-          ]
+          contents: [result]
         };
       } catch (error: any) {
-        throw new McpError(ErrorCode.InternalError, `Failed to read file: ${error.message}`);
+        if (error instanceof McpError) throw error;
+        throw new McpError(ErrorCode.InternalError, `Failed to read resource: ${error.message}`);
       }
     });
 
@@ -167,23 +168,6 @@ export class ObsidianServer {
         );
       }
     });
-  }
-
-  private async getAllMarkdownFiles(dir = this.vaultPath): Promise<string[]> {
-    let files: string[] = [];
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      
-      if (entry.isDirectory() && !entry.name.startsWith(".")) {
-        files = files.concat(await this.getAllMarkdownFiles(fullPath));
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
-        files.push(fullPath);
-      }
-    }
-
-    return files;
   }
 
   async start() {
