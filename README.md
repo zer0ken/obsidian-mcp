@@ -31,7 +31,7 @@ Add to your Claude Desktop configuration:
     "mcpServers": {
         "obsidian": {
             "command": "npx",
-            "args": ["-y", "obsidian-mcp", "/path/to/your/vault"]
+            "args": ["-y", "obsidian-mcp", "/path/to/your/vault", "/path/to/your/vault2"]
         }
     }
 }
@@ -75,7 +75,7 @@ Then add to your Claude Desktop configuration:
     "mcpServers": {
         "obsidian": {
             "command": "node",
-            "args": ["<absolute-path-to-obsidian-mcp>/build/main.js", "/path/to/your/vault"]
+            "args": ["<absolute-path-to-obsidian-mcp>/build/main.js", "/path/to/your/vault", "/path/to/your/vault2"]
         }
     }
 }
@@ -94,6 +94,7 @@ Then add to your Claude Desktop configuration:
 - `remove-tags` - Remove tags from a note
 - `rename-tag` - Rename a tag across all notes
 - `manage-tags` - List and organize tags
+- `list-available-vaults` - List all available vaults (helps with multi-vault setups)
 
 ## Documentation
 
