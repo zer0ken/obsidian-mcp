@@ -47,7 +47,14 @@ const editSchema = z.object({
       "Folder must be a relative path")
     .describe("Optional subfolder path relative to vault root"),
   operation: z.enum(['append', 'prepend', 'replace'])
-    .describe("Type of edit operation"),
+    .describe("Type of edit operation - must be one of: 'append', 'prepend', 'replace'")
+    .refine(
+      (op) => ['append', 'prepend', 'replace'].includes(op),
+      {
+        message: "Invalid operation. Must be one of: 'append', 'prepend', 'replace'",
+        path: ['operation']
+      }
+    ),
   content: z.string()
     .min(1, "Content cannot be empty for non-delete operations")
     .describe("New content to add/prepend/replace")
@@ -200,6 +207,11 @@ export function createEditNoteTool(vaults: Map<string, string>) {
   return createTool<EditNoteArgs>({
     name: "edit-note",
     description: `Edit an existing note in the specified vault.
+
+    There is a limited and discrete list of supported operations:
+    - append: Appends content to the end of the note
+    - prepend: Prepends content to the beginning of the note
+    - replace: Replaces the entire content of the note
 
 Examples:
 - Root note: { "vault": "vault1", "filename": "note.md", "operation": "append", "content": "new content" }

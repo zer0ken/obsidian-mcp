@@ -101,7 +101,6 @@ export class ObsidianServer {
 
     // Setup connection monitoring with grace period for initialization
     this.connectionMonitor.start(() => {
-      console.error("Connection timeout detected");
       this.server.close();
     });
     
