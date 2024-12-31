@@ -12,6 +12,9 @@ import { createSchemaHandler } from "../../utils/schema.js";
 // Input validation schema with descriptions
 // Schema for delete operation
 const deleteSchema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the note"),
   filename: z.string()
     .min(1, "Filename cannot be empty")
     .refine(name => !name.includes('/') && !name.includes('\\'), 
@@ -30,6 +33,9 @@ const deleteSchema = z.object({
 
 // Schema for non-delete operations
 const editSchema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the note"),
   filename: z.string()
     .min(1, "Filename cannot be empty")
     .refine(name => !name.includes('/') && !name.includes('\\'), 
@@ -192,22 +198,31 @@ async function editNote(
   }
 }
 
-export function createEditNoteTool(vaultPath: string): Tool {
+export function createEditNoteTool(vaults: Map<string, string>): Tool {
   return {
     name: "edit-note",
-    description: `Edit an existing note in the vault.
+    description: `Edit an existing note in the specified vault.
 
 Examples:
-- Root note: { "filename": "note.md", "operation": "append", "content": "new content" }
-- Subfolder note: { "filename": "note.md", "folder": "journal/2024", "operation": "append", "content": "new content" }
+- Root note: { "vault": "vault1", "filename": "note.md", "operation": "append", "content": "new content" }
+- Subfolder note: { "vault": "vault2", "filename": "note.md", "folder": "journal/2024", "operation": "append", "content": "new content" }
 - INCORRECT: { "filename": "journal/2024/note.md" } (don't put path in filename)`,
     inputSchema: schemaHandler,
     handler: async (args) => {
       try {
         // Parse and validate input
         const validated = schemaHandler.parse(args) as EditInput;
-        const { filename, folder, operation, content } = validated;
+        const { vault, filename, folder, operation, content } = validated;
         
+        // Get vault path
+        const vaultPath = vaults.get(vault);
+        if (!vaultPath) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
+          );
+        }
+
         // Execute the edit operation
         const result = await editNote(vaultPath, filename, operation, content, folder);
         

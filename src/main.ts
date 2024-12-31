@@ -1,37 +1,52 @@
 #!/usr/bin/env node
-import { ObsidianServer } from "./server.js";
-import { createCreateNoteTool } from "./tools/create-note/index.js";
-import { createEditNoteTool } from "./tools/edit-note/index.js";
-import { createSearchVaultTool } from "./tools/search-vault/index.js";
-import { createMoveNoteTool } from "./tools/move-note/index.js";
-import { createCreateDirectoryTool } from "./tools/create-directory/index.js";
-import { createDeleteNoteTool } from "./tools/delete-note/index.js";
-import { createAddTagsTool } from "./tools/add-tags/index.js";
-import { createRemoveTagsTool } from "./tools/remove-tags/index.js";
-import { createRenameTagTool } from "./tools/rename-tag/index.js";
-import { createReadNoteTool } from "./tools/read-note/index.js";
+import { ObsidianServer } from "./server";
+import { createCreateNoteTool } from "./tools/create-note";
+import { createEditNoteTool } from "./tools/edit-note";
+import { createSearchVaultTool } from "./tools/search-vault";
+import { createMoveNoteTool } from "./tools/move-note";
+import { createCreateDirectoryTool } from "./tools/create-directory";
+import { createDeleteNoteTool } from "./tools/delete-note";
+import { createAddTagsTool } from "./tools/add-tags";
+import { createRemoveTagsTool } from "./tools/remove-tags";
+import { createRenameTagTool } from "./tools/rename-tag";
+import { createReadNoteTool } from "./tools/read-note";
+
+interface VaultConfig {
+  name: string;
+  path: string;
+}
 
 async function main() {
-  const vaultPath = process.argv[2];
-  if (!vaultPath) {
-    console.error("Please provide the path to your Obsidian vault");
+  const vaultArgs = process.argv.slice(2);
+  if (vaultArgs.length === 0) {
+    console.error("Please provide paths to your Obsidian vaults");
+    console.error("Usage: obsidian-mcp <vault1_path> [vault2_path ...]");
     process.exit(1);
   }
 
+  // Create vault configurations
+  const vaults: VaultConfig[] = vaultArgs.map((path, index) => ({
+    name: `vault${index + 1}`,
+    path
+  }));
+
   try {
-    const server = new ObsidianServer(vaultPath);
-    
+    const server = new ObsidianServer(vaults);
+
+    // Create vaults Map
+    const vaultsMap = new Map(vaults.map(v => [v.name, v.path]));
+
     // Register tools
-    server.registerTool(createCreateNoteTool(vaultPath));
-    server.registerTool(createEditNoteTool(vaultPath));
-    server.registerTool(createSearchVaultTool(vaultPath));
-    server.registerTool(createMoveNoteTool(vaultPath));
-    server.registerTool(createCreateDirectoryTool(vaultPath));
-    server.registerTool(createDeleteNoteTool(vaultPath));
-    server.registerTool(createAddTagsTool(vaultPath));
-    server.registerTool(createRemoveTagsTool(vaultPath));
-    server.registerTool(createRenameTagTool(vaultPath));
-    server.registerTool(createReadNoteTool(vaultPath));
+    server.registerTool(createCreateNoteTool(vaultsMap));
+    server.registerTool(createEditNoteTool(vaultsMap));
+    server.registerTool(createSearchVaultTool(vaultsMap));
+    server.registerTool(createMoveNoteTool(vaultsMap));
+    server.registerTool(createCreateDirectoryTool(vaultsMap));
+    server.registerTool(createDeleteNoteTool(vaultsMap));
+    server.registerTool(createAddTagsTool(vaultsMap));
+    server.registerTool(createRemoveTagsTool(vaultsMap));
+    server.registerTool(createRenameTagTool(vaultsMap));
+    server.registerTool(createReadNoteTool(vaultsMap));
 
     await server.start();
   } catch (error) {

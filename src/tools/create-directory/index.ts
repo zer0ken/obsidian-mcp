@@ -7,6 +7,9 @@ import { createSchemaHandler } from "../../utils/schema.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault where the directory should be created"),
   path: z.string()
     .min(1, "Directory path cannot be empty")
     .refine(dirPath => !path.isAbsolute(dirPath), 
@@ -65,19 +68,28 @@ async function createDirectory(
   }
 }
 
-export function createCreateDirectoryTool(vaultPath: string): Tool {
-  if (!vaultPath) {
-    throw new Error("Vault path is required");
+export function createCreateDirectoryTool(vaults: Map<string, string>): Tool {
+  if (!vaults || vaults.size === 0) {
+    throw new Error("At least one vault is required");
   }
 
   return {
     name: "create-directory",
-    description: "Create a new directory in the vault",
+    description: "Create a new directory in the specified vault",
     inputSchema: schemaHandler,
     handler: async (args) => {
       try {
         const validated = schemaHandler.parse(args);
-        const { path: dirPath, recursive = true } = validated;
+        const { vault, path: dirPath, recursive = true } = validated;
+        
+        const vaultPath = vaults.get(vault);
+        if (!vaultPath) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
+          );
+        }
+
         const createdPath = await createDirectory(vaultPath, dirPath, recursive);
         
         return {

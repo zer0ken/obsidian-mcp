@@ -20,6 +20,9 @@ import { createSchemaHandler } from "../../utils/schema.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the notes"),
   files: z.array(z.string())
     .min(1, "At least one file must be specified")
     .refine(
@@ -80,7 +83,7 @@ type RemoveTagsInput = z.infer<typeof schema>;
 
 async function removeTags(
   vaultPath: string,
-  params: RemoveTagsInput
+  params: Omit<RemoveTagsInput, 'vault'>
 ): Promise<RemoveTagsReport> {
   const results: RemoveTagsReport = {
     success: [],
@@ -184,9 +187,9 @@ async function removeTags(
 // Create schema handler that provides both Zod validation and JSON Schema
 const schemaHandler = createSchemaHandler(schema);
 
-export function createRemoveTagsTool(vaultPath: string): Tool {
-  if (!vaultPath) {
-    throw new Error("Vault path is required");
+export function createRemoveTagsTool(vaults: Map<string, string>): Tool {
+  if (!vaults || vaults.size === 0) {
+    throw new Error("At least one vault is required");
   }
   return {
     name: "remove-tags",
@@ -206,6 +209,7 @@ Examples:
         
         // Ensure defaults are set
         const validated = {
+          vault: parsed.vault,
           files: parsed.files,
           tags: parsed.tags,
           options: {
@@ -216,8 +220,26 @@ Examples:
           }
         };
         
+        // Get vault path
+        const vaultPath = vaults.get(parsed.vault);
+        if (!vaultPath) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Unknown vault: ${validated.vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
+          );
+        }
+
         // Execute tag removal
-        const results = await removeTags(vaultPath, validated);
+        const results = await removeTags(vaultPath, {
+          files: parsed.files,
+          tags: parsed.tags,
+          options: {
+            location: parsed.options?.location ?? 'both',
+            normalize: parsed.options?.normalize ?? true,
+            preserveChildren: parsed.options?.preserveChildren ?? false,
+            patterns: parsed.options?.patterns ?? []
+          }
+        });
         
         // Format detailed response message
         let message = '';

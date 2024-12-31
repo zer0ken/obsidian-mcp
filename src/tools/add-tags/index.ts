@@ -18,6 +18,9 @@ import { createSchemaHandler } from "../../utils/schema.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the notes"),
   files: z.array(z.string())
     .min(1, "At least one file must be specified")
     .refine(
@@ -165,7 +168,10 @@ async function addTags(
   return result;
 }
 
-export function createAddTagsTool(vaultPath: string): Tool {
+export function createAddTagsTool(vaults: Map<string, string>): Tool {
+  if (!vaults || vaults.size === 0) {
+    throw new Error("At least one vault is required");
+  }
   return {
     name: "add-tags",
     description: `Add tags to notes in frontmatter and/or content.
@@ -178,8 +184,16 @@ Examples:
     handler: async (args) => {
       try {
         const validated = schemaHandler.parse(args);
-        const { files, tags, location = 'both', normalize = true, position = 'end' } = validated;
+        const { vault, files, tags, location = 'both', normalize = true, position = 'end' } = validated;
         
+        const vaultPath = vaults.get(vault);
+        if (!vaultPath) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
+          );
+        }
+
         const result = await addTags(vaultPath, files, tags, location, normalize, position);
         
         return createToolResponse(formatTagResult(result));

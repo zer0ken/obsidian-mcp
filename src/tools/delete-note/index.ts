@@ -11,6 +11,9 @@ import { createSchemaHandler } from "../../utils/schema.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the note"),
   path: z.string()
     .min(1, "Path cannot be empty")
     .refine(name => !path.isAbsolute(name), 
@@ -123,9 +126,9 @@ async function deleteNote(
   }
 }
 
-export function createDeleteNoteTool(vaultPath: string): Tool {
-  if (!vaultPath) {
-    throw new Error("Vault path is required");
+export function createDeleteNoteTool(vaults: Map<string, string>): Tool {
+  if (!vaults || vaults.size === 0) {
+    throw new Error("At least one vault is required");
   }
 
   return {
@@ -135,8 +138,16 @@ export function createDeleteNoteTool(vaultPath: string): Tool {
     handler: async (args) => {
       try {
         const validated = schemaHandler.parse(args);
-        const { path: notePath, reason, permanent } = validated;
+        const { vault, path: notePath, reason, permanent } = validated;
         
+        const vaultPath = vaults.get(vault);
+        if (!vaultPath) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
+          );
+        }
+
         // Ensure .md extension
         const fullNotePath = ensureMarkdownExtension(notePath);
         

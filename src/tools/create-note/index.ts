@@ -11,6 +11,9 @@ import { createSchemaHandler } from "../../utils/schema.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault to create the note in"),
   filename: z.string()
     .min(1, "Filename cannot be empty")
     .refine(name => !name.includes('/') && !name.includes('\\'), 
@@ -71,24 +74,33 @@ async function createNote(
   }
 }
 
-export function createCreateNoteTool(vaultPath: string): Tool {
-  if (!vaultPath) {
-    throw new Error("Vault path is required");
+export function createCreateNoteTool(vaults: Map<string, string>): Tool {
+  if (!vaults || vaults.size === 0) {
+    throw new Error("At least one vault is required");
   }
 
   return {
     name: "create-note",
-    description: `Create a new note in the vault with markdown content.
+    description: `Create a new note in the specified vault with markdown content.
 
 Examples:
-- Root note: { "filename": "note.md" }
-- Subfolder note: { "filename": "note.md", "folder": "journal/2024" }
+- Root note: { "vault": "vault1", "filename": "note.md" }
+- Subfolder note: { "vault": "vault2", "filename": "note.md", "folder": "journal/2024" }
 - INCORRECT: { "filename": "journal/2024/note.md" } (don't put path in filename)`,
     inputSchema: schemaHandler,
     handler: async (args) => {
       try {
         const validated = schemaHandler.parse(args);
-        const { filename, content, folder } = validated;
+        const { vault, filename, content, folder } = validated;
+        
+        const vaultPath = vaults.get(vault);
+        if (!vaultPath) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
+          );
+        }
+
         const result = await createNote(vaultPath, filename, content, folder);
         
         return createToolResponse(formatFileResult(result));

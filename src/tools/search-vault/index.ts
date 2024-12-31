@@ -12,6 +12,9 @@ import { createSchemaHandler } from "../../utils/schema.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault to search in"),
   query: z.string()
     .min(1, "Search query cannot be empty")
     .describe("Search query (required). For text search use the term directly, for tag search use tag: prefix"),
@@ -220,28 +223,37 @@ async function searchVault(
   }
 }
 
-export const createSearchVaultTool = (vaultPath: string): Tool => {
-  if (!vaultPath) {
-    throw new Error("Vault path is required");
+export const createSearchVaultTool = (vaults: Map<string, string>): Tool => {
+  if (!vaults || vaults.size === 0) {
+    throw new Error("At least one vault is required");
   }
 
   return {
     name: "search-vault",
-    description: `Search for text or tags across markdown notes in the vault.
+    description: `Search for text or tags across markdown notes in the specified vault.
 
 Examples:
-- Content search: { "query": "hello world", "searchType": "content" }
-- Filename search: { "query": "meeting-notes", "searchType": "filename" }
-- Search both: { "query": "project", "searchType": "both" }
-- Tag search: { "query": "tag:status/active" }
-- Search in subfolder: { "query": "hello", "path": "journal/2024" }
+- Content search: { "vault": "vault1", "query": "hello world", "searchType": "content" }
+- Filename search: { "vault": "vault2", "query": "meeting-notes", "searchType": "filename" }
+- Search both: { "vault": "vault1", "query": "project", "searchType": "both" }
+- Tag search: { "vault": "vault2", "query": "tag:status/active" }
+- Search in subfolder: { "vault": "vault1", "query": "hello", "path": "journal/2024" }
 - INCORRECT: { "query": "#status/active" } (use tag: prefix, not #)
 - INCORRECT: { "query": "status/active" } (missing tag: prefix for tag search)`,
     inputSchema: schemaHandler,
     handler: async (args) => {
       try {
         const validated = schemaHandler.parse(args);
-        const { query, path, caseSensitive, searchType } = validated;
+        const { vault, query, path, caseSensitive, searchType } = validated;
+        
+        const vaultPath = vaults.get(vault);
+        if (!vaultPath) {
+          throw new McpError(
+            ErrorCode.InvalidParams,
+            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
+          );
+        }
+
         const options: SearchOptions = { path, caseSensitive, searchType };
         const result = await searchVault(vaultPath, query, options);
         

@@ -46,14 +46,16 @@ async function resolveSymlinks(filepath: string): Promise<string> {
 export class ObsidianServer {
   private server: Server;
   private tools: Map<string, Tool<any>> = new Map();
-  private vaultPath: string;
+  private vaults: Map<string, string> = new Map();
   private rateLimiter: RateLimiter;
   private connectionMonitor: ConnectionMonitor;
 
-  constructor(vaultPath: string) {
-    // Normalize and resolve vault path
-    const expandedPath = expandHome(vaultPath);
-    this.vaultPath = path.resolve(expandedPath);
+  constructor(vaultConfigs: { name: string; path: string }[]) {
+    // Initialize vaults
+    vaultConfigs.forEach(config => {
+      const expandedPath = expandHome(config.path);
+      this.vaults.set(config.name, path.resolve(expandedPath));
+    });
     this.server = new Server(
       {
         name: "obsidian-vault",
@@ -123,8 +125,17 @@ export class ObsidianServer {
     // List available resources
     this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
       this.validateRequest(request);
-      const resources = await listNoteResources(this.vaultPath);
+      const resources = [];
       const templates = getNoteResourceTemplates();
+      
+      // Get resources from all vaults
+      for (const [vaultName, vaultPath] of this.vaults) {
+        const vaultResources = await listNoteResources(vaultPath);
+        resources.push(...vaultResources.map(resource => ({
+          ...resource,
+          uri: `obsidian://${vaultName}/${resource.uri}`
+        })));
+      }
       
       return {
         resources,
@@ -140,8 +151,20 @@ export class ObsidianServer {
         throw new McpError(ErrorCode.InvalidParams, "Missing or invalid URI parameter");
       }
 
+      // Parse vault name from URI
+      const uriParts = uri.split('://');
+      if (uriParts.length !== 2 || uriParts[0] !== 'obsidian') {
+        throw new McpError(ErrorCode.InvalidParams, "Invalid URI format");
+      }
+
+      const [vaultName, resourcePath] = uriParts[1].split('/', 1);
+      const vaultPath = this.vaults.get(vaultName);
+      if (!vaultPath) {
+        throw new McpError(ErrorCode.InvalidParams, `Unknown vault: ${vaultName}`);
+      }
+
       try {
-        const result = await readNoteResource(this.vaultPath, uri);
+        const result = await readNoteResource(vaultPath, resourcePath);
         return {
           contents: [result]
         };
