@@ -33,20 +33,6 @@ function expandHome(filepath: string): string {
   return filepath;
 }
 
-// Utility function to resolve symlinks
-async function resolveSymlinks(filepath: string): Promise<string> {
-  try {
-    const realPath = await fs.realpath(filepath);
-    return realPath;
-  } catch (error) {
-    // If file doesn't exist yet, return original path
-    if ((error as any).code === 'ENOENT') {
-      return filepath;
-    }
-    throw error;
-  }
-}
-
 export class ObsidianServer {
   private server: Server;
   private tools: Map<string, Tool<any>> = new Map();
@@ -266,12 +252,12 @@ export class ObsidianServer {
   async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.error("Obsidian MCP Server running on stdio");
+    console.log("Obsidian MCP Server running on stdio");
   }
 
   async stop() {
     this.connectionMonitor.stop();
     await this.server.close();
-    console.error("Obsidian MCP Server stopped");
+    console.log("Obsidian MCP Server stopped");
   }
 }

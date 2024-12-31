@@ -9,8 +9,8 @@ export interface BaseToolConfig<T> {
   description: string;
   schema: z.ZodType<any>;
   handler: (
-    args: T, 
-    sourcePath: string, 
+    args: T,
+    sourcePath: string,
     sourceVaultName: string,
     destinationPath?: string,
     destinationVaultName?: string,
@@ -53,6 +53,10 @@ export function createTool<T extends { vault: string }>(
 /**
  * Creates a standardized tool that operates between two vaults
  */
+
+// NOT IN USE
+
+/*
 export function createDualVaultTool<T extends { sourceVault: string; destinationVault: string }>(
   config: BaseToolConfig<T>,
   vaults: Map<string, string>
@@ -91,3 +95,4 @@ export function createDualVaultTool<T extends { sourceVault: string; destination
     }
   };
 }
+*/

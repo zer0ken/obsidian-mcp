@@ -539,19 +539,19 @@ Examples:
   });
 
   // Log final vault configuration
-  console.error("\nSuccessfully configured vaults:");
+  console.log("\nSuccessfully configured vaults:");
   uniqueVaults.forEach(vault => {
-    console.error(`- ${vault.name}`);
-    console.error(`  Path: ${vault.path}`);
+    console.log(`- ${vault.name}`);
+    console.log(`  Path: ${vault.path}`);
   });
-  console.error(`\nTotal vaults: ${uniqueVaults.length}`);
-  console.error(""); // Empty line for readability
+  console.log(`\nTotal vaults: ${uniqueVaults.length}`);
+  console.log(""); // Empty line for readability
 
   try {
-    console.error(`Starting Obsidian MCP Server with ${uniqueVaults.length} vault${uniqueVaults.length > 1 ? 's' : ''}...`);
+    console.log(`Starting Obsidian MCP Server with ${uniqueVaults.length} vault${uniqueVaults.length > 1 ? 's' : ''}...`);
     
     const server = new ObsidianServer(uniqueVaults);
-    console.error("Server initialized successfully");
+    console.log("Server initialized successfully");
 
     // Handle graceful shutdown
     let isShuttingDown = false;
@@ -559,10 +559,10 @@ Examples:
       if (isShuttingDown) return;
       isShuttingDown = true;
 
-      console.error(`\nReceived ${signal}, shutting down...`);
+      console.log(`\nReceived ${signal}, shutting down...`);
       try {
         await server.stop();
-        console.error("Server stopped cleanly");
+        console.log("Server stopped cleanly");
         process.exit(0);
       } catch (error) {
         console.error("Error during shutdown:", error);

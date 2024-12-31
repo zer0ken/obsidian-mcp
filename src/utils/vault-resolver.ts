@@ -12,10 +12,12 @@ export interface DualVaultResolutionResult {
 }
 
 export class VaultResolver {
-  constructor(private vaults: Map<string, string>) {
+  private vaults: Map<string, string>;
+  constructor(vaults: Map<string, string>) {
     if (!vaults || vaults.size === 0) {
       throw new Error("At least one vault is required");
     }
+    this.vaults = vaults;
   }
 
   /**
@@ -23,7 +25,7 @@ export class VaultResolver {
    */
   resolveVault(vaultName: string): VaultResolutionResult {
     const vaultPath = this.vaults.get(vaultName);
-    
+
     if (!vaultPath) {
       throw new McpError(
         ErrorCode.InvalidParams,
@@ -37,6 +39,9 @@ export class VaultResolver {
   /**
    * Resolves source and destination vaults for operations that work across vaults
    */
+  // NOT IN USE
+
+  /*
   resolveDualVaults(sourceVault: string, destinationVault: string): DualVaultResolutionResult {
     const source = this.resolveVault(sourceVault);
     const destination = this.resolveVault(destinationVault);
@@ -48,6 +53,7 @@ export class VaultResolver {
       isCrossVault
     };
   }
+    */
 
   /**
    * Returns a list of available vault names
