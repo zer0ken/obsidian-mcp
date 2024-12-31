@@ -1,13 +1,12 @@
 import { z } from "zod";
-import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js";
 import { fileExists, ensureDirectory } from "../../utils/files.js";
 import { updateVaultLinks } from "../../utils/links.js";
 import { createNoteNotFoundError, handleFsError } from "../../utils/errors.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
@@ -28,8 +27,6 @@ const schema = z.object({
     .describe("Whether to permanently delete instead of moving to trash (default: false)")
 }).strict();
 
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
 
 interface TrashMetadata {
   originalPath: string;
@@ -126,50 +123,30 @@ async function deleteNote(
   }
 }
 
-export function createDeleteNoteTool(vaults: Map<string, string>): Tool {
-  if (!vaults || vaults.size === 0) {
-    throw new Error("At least one vault is required");
-  }
+type DeleteNoteArgs = z.infer<typeof schema>;
 
-  return {
+export function createDeleteNoteTool(vaults: Map<string, string>) {
+  return createTool<DeleteNoteArgs>({
     name: "delete-note",
     description: "Delete a note, moving it to .trash by default or permanently deleting if specified",
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        const validated = schemaHandler.parse(args);
-        const { vault, path: notePath, reason, permanent } = validated;
-        
-        const vaultPath = vaults.get(vault);
-        if (!vaultPath) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
-          );
-        }
-
-        // Ensure .md extension
-        const fullNotePath = ensureMarkdownExtension(notePath);
-        
-        const resultMessage = await deleteNote(vaultPath, fullNotePath, { reason, permanent });
-        
-        return {
-          content: [
-            {
-              type: "text",
-              text: resultMessage
-            }
-          ]
-        };
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
+    schema,
+    handler: async (args, vaultPath, _vaultName) => {
+      // Ensure .md extension
+      const fullNotePath = ensureMarkdownExtension(args.path);
+      
+      const resultMessage = await deleteNote(vaultPath, fullNotePath, { 
+        reason: args.reason, 
+        permanent: args.permanent 
+      });
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: resultMessage
+          }
+        ]
+      };
     }
-  };
+  }, vaults);
 }

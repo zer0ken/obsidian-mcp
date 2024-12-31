@@ -5,6 +5,8 @@ import {
   ListToolsRequestSchema,
   ListResourcesRequestSchema,
   ReadResourceRequestSchema,
+  ListPromptsRequestSchema,
+  GetPromptRequestSchema,
   McpError,
   ErrorCode,
   Request
@@ -16,10 +18,12 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from 'os';
 import {
-  listNoteResources,
   getNoteResourceTemplates,
-  readNoteResource
+  listVaultResources,
+  readVaultResource
 } from "./utils/resources.js";
+import { listPrompts, getPrompt, registerPrompt } from "./utils/prompt-factory.js";
+import { listVaultsPrompt } from "./prompts/list-vaults/index.js";
 
 // Utility function to expand home directory
 function expandHome(filepath: string): string {
@@ -64,7 +68,8 @@ export class ObsidianServer {
       {
         capabilities: {
           resources: {},
-          tools: {}
+          tools: {},
+          prompts: {}
         }
       }
     );
@@ -72,6 +77,9 @@ export class ObsidianServer {
     // Initialize security features
     this.rateLimiter = new RateLimiter();
     this.connectionMonitor = new ConnectionMonitor();
+
+    // Register prompts
+    registerPrompt(listVaultsPrompt);
 
     this.setupHandlers();
 
@@ -110,6 +118,31 @@ export class ObsidianServer {
   }
 
   private setupHandlers() {
+    // List available prompts
+    this.server.setRequestHandler(ListPromptsRequestSchema, async (request) => {
+      this.validateRequest(request);
+      return listPrompts();
+    });
+
+    // Get specific prompt
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+      this.validateRequest(request);
+      const { name, arguments: args } = request.params;
+      
+      if (!name || typeof name !== 'string') {
+        throw new McpError(ErrorCode.InvalidParams, "Missing or invalid prompt name");
+      }
+
+      const result = await getPrompt(name, this.vaults, args);
+      return {
+        ...result,
+        _meta: {
+          promptName: name,
+          timestamp: new Date().toISOString()
+        }
+      };
+    });
+
     // List available tools
     this.server.setRequestHandler(ListToolsRequestSchema, async (request) => {
       this.validateRequest(request);
@@ -125,21 +158,10 @@ export class ObsidianServer {
     // List available resources
     this.server.setRequestHandler(ListResourcesRequestSchema, async (request) => {
       this.validateRequest(request);
-      const resources = [];
-      const templates = getNoteResourceTemplates();
-      
-      // Get resources from all vaults
-      for (const [vaultName, vaultPath] of this.vaults) {
-        const vaultResources = await listNoteResources(vaultPath);
-        resources.push(...vaultResources.map(resource => ({
-          ...resource,
-          uri: `obsidian://${vaultName}/${resource.uri}`
-        })));
-      }
-      
+      const resources = await listVaultResources(this.vaults);
       return {
         resources,
-        resourceTemplates: templates
+        resourceTemplates: getNoteResourceTemplates()
       };
     });
 
@@ -151,27 +173,32 @@ export class ObsidianServer {
         throw new McpError(ErrorCode.InvalidParams, "Missing or invalid URI parameter");
       }
 
-      // Parse vault name from URI
-      const uriParts = uri.split('://');
-      if (uriParts.length !== 2 || uriParts[0] !== 'obsidian') {
-        throw new McpError(ErrorCode.InvalidParams, "Invalid URI format");
+      if (!uri.startsWith('obsidian-vault://')) {
+        throw new McpError(ErrorCode.InvalidParams, "Invalid URI format. Only vault resources are supported.");
       }
 
-      const [vaultName, resourcePath] = uriParts[1].split('/', 1);
-      const vaultPath = this.vaults.get(vaultName);
-      if (!vaultPath) {
-        throw new McpError(ErrorCode.InvalidParams, `Unknown vault: ${vaultName}`);
-      }
-
-      try {
-        const result = await readNoteResource(vaultPath, resourcePath);
+      // Handle root vault list
+      if (uri === 'obsidian-vault://') {
         return {
-          contents: [result]
+          contents: [{
+            uri,
+            mimeType: "application/json",
+            text: JSON.stringify({
+              totalVaults: this.vaults.size,
+              vaults: Array.from(this.vaults.entries()).map(([name, path]) => ({
+                name,
+                path,
+                isAccessible: true
+              }))
+            }, null, 2)
+          }]
         };
-      } catch (error: any) {
-        if (error instanceof McpError) throw error;
-        throw new McpError(ErrorCode.InternalError, `Failed to read resource: ${error.message}`);
       }
+
+      // Handle individual vault resources
+      return {
+        contents: [await readVaultResource(this.vaults, uri)]
+      };
     });
 
     this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Tool, SearchResult, SearchOperationResult, SearchOptions } from "../../types.js";
+import { SearchResult, SearchOperationResult, SearchOptions } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -8,7 +8,7 @@ import { getAllMarkdownFiles } from "../../utils/files.js";
 import { handleFsError } from "../../utils/errors.js";
 import { extractTags, normalizeTag, matchesTagPattern } from "../../utils/tags.js";
 import { createToolResponse, formatSearchResult } from "../../utils/responses.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
@@ -31,8 +31,7 @@ const schema = z.object({
     .describe("Type of search to perform (default: content)")
 }).strict();
 
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
+type SearchVaultInput = z.infer<typeof schema>;
 
 // Helper functions
 function isTagSearch(query: string): boolean {
@@ -100,7 +99,7 @@ async function searchContent(
         if (isTagSearchQuery) {
           // For tag searches, extract all tags from the content
           const fileTags = extractTags(content);
-          
+
           lines.forEach((line, index) => {
             // Look for tag matches in each line
             const lineTags = extractTags(line);
@@ -119,7 +118,7 @@ async function searchContent(
         } else {
           // Regular text search
           const searchQuery = options.caseSensitive ? query : query.toLowerCase();
-          
+
           lines.forEach((line, index) => {
             const searchLine = options.caseSensitive ? line : line.toLowerCase();
             if (searchLine.includes(searchQuery)) {
@@ -187,7 +186,7 @@ async function searchVault(
       }
     }
 
-    const totalMatches = results.reduce((sum, result) => sum + result.matches.length, 0);
+    const totalMatches = results.reduce((sum, result) => sum + (result.matches?.length ?? 0), 0);
 
     // If we have some results but also errors, we'll return partial results with a warning
     if (results.length > 0 && errors.length > 0) {
@@ -223,50 +222,28 @@ async function searchVault(
   }
 }
 
-export const createSearchVaultTool = (vaults: Map<string, string>): Tool => {
-  if (!vaults || vaults.size === 0) {
-    throw new Error("At least one vault is required");
-  }
-
-  return {
+export const createSearchVaultTool = (vaults: Map<string, string>) => {
+  return createTool<SearchVaultInput>({
     name: "search-vault",
-    description: `Search for text or tags across markdown notes in the specified vault.
+    description: `Search for specific content within vault notes (NOT for listing available vaults - use the list-vaults prompt for that).
 
-Examples:
+This tool searches through note contents and filenames for specific text or tags:
 - Content search: { "vault": "vault1", "query": "hello world", "searchType": "content" }
 - Filename search: { "vault": "vault2", "query": "meeting-notes", "searchType": "filename" }
 - Search both: { "vault": "vault1", "query": "project", "searchType": "both" }
 - Tag search: { "vault": "vault2", "query": "tag:status/active" }
 - Search in subfolder: { "vault": "vault1", "query": "hello", "path": "journal/2024" }
-- INCORRECT: { "query": "#status/active" } (use tag: prefix, not #)
-- INCORRECT: { "query": "status/active" } (missing tag: prefix for tag search)`,
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        const validated = schemaHandler.parse(args);
-        const { vault, query, path, caseSensitive, searchType } = validated;
-        
-        const vaultPath = vaults.get(vault);
-        if (!vaultPath) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
-          );
-        }
 
-        const options: SearchOptions = { path, caseSensitive, searchType };
-        const result = await searchVault(vaultPath, query, options);
-        
-        return createToolResponse(formatSearchResult(result));
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
+Note: To get a list of available vaults, use the list-vaults prompt instead of this search tool.`,
+    schema,
+    handler: async (args, vaultPath, _vaultName) => {
+      const options: SearchOptions = {
+        path: args.path,
+        caseSensitive: args.caseSensitive,
+        searchType: args.searchType
+      };
+      const result = await searchVault(vaultPath, args.query, options);
+      return createToolResponse(formatSearchResult(result));
     }
-  };
+  }, vaults);
 }

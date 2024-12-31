@@ -1,11 +1,10 @@
 import { z } from "zod";
-import { Tool, TagOperationResult } from "../../types.js";
+import { TagOperationResult } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { validateVaultPath } from "../../utils/path.js";
 import { fileExists, safeReadFile } from "../../utils/files.js";
-import { handleFsError } from "../../utils/errors.js";
 import {
   validateTag,
   parseNote,
@@ -14,7 +13,7 @@ import {
   normalizeTag
 } from "../../utils/tags.js";
 import { createToolResponse, formatTagResult } from "../../utils/responses.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
@@ -46,8 +45,7 @@ const schema = z.object({
     .describe("Where to add inline tags in content (default: end)")
 }).strict();
 
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
+type AddTagsArgs = z.infer<typeof schema>;
 
 async function addTags(
   vaultPath: string,
@@ -168,11 +166,8 @@ async function addTags(
   return result;
 }
 
-export function createAddTagsTool(vaults: Map<string, string>): Tool {
-  if (!vaults || vaults.size === 0) {
-    throw new Error("At least one vault is required");
-  }
-  return {
+export function createAddTagsTool(vaults: Map<string, string>) {
+  return createTool<AddTagsArgs>({
     name: "add-tags",
     description: `Add tags to notes in frontmatter and/or content.
 
@@ -180,32 +175,18 @@ Examples:
 - Add to both locations: { "files": ["note.md"], "tags": ["status/active"] }
 - Add to frontmatter only: { "files": ["note.md"], "tags": ["project/docs"], "location": "frontmatter" }
 - Add to start of content: { "files": ["note.md"], "tags": ["type/meeting"], "location": "content", "position": "start" }`,
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        const validated = schemaHandler.parse(args);
-        const { vault, files, tags, location = 'both', normalize = true, position = 'end' } = validated;
-        
-        const vaultPath = vaults.get(vault);
-        if (!vaultPath) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
-          );
-        }
-
-        const result = await addTags(vaultPath, files, tags, location, normalize, position);
-        
-        return createToolResponse(formatTagResult(result));
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
+    schema,
+    handler: async (args, vaultPath, _vaultName) => {
+      const result = await addTags(
+        vaultPath, 
+        args.files, 
+        args.tags, 
+        args.location ?? 'both', 
+        args.normalize ?? true, 
+        args.position ?? 'end'
+      );
+      
+      return createToolResponse(formatTagResult(result));
     }
-  };
+  }, vaults);
 }

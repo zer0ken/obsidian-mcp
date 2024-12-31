@@ -1,10 +1,9 @@
 import { z } from "zod";
-import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { validateVaultPath } from "../../utils/path.js";
-import { fileExists, getAllMarkdownFiles, safeReadFile } from "../../utils/files.js";
+import { fileExists, safeReadFile } from "../../utils/files.js";
 import {
   validateTag,
   parseNote,
@@ -12,15 +11,15 @@ import {
   addTagsToFrontmatter,
   removeTagsFromFrontmatter,
   removeInlineTags,
-  matchesTagPattern,
-  isParentTag,
-  getRelatedTags,
   normalizeTag
 } from "../../utils/tags.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the notes"),
   files: z.array(z.string())
     .min(1, "At least one file must be specified")
     .refine(
@@ -60,8 +59,20 @@ const schema = z.object({
   })
 }).strict();
 
-// Types
 type ManageTagsInput = z.infer<typeof schema>;
+
+interface OperationParams {
+  files: string[];
+  operation: 'add' | 'remove';
+  tags: string[];
+  options: {
+    location: 'frontmatter' | 'content' | 'both';
+    normalize: boolean;
+    position: 'start' | 'end';
+    preserveChildren: boolean;
+    patterns: string[];
+  };
+}
 
 interface OperationReport {
   success: string[];
@@ -83,9 +94,6 @@ interface OperationReport {
     };
   };
 }
-
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
 
 async function manageTags(
   vaultPath: string,
@@ -224,39 +232,20 @@ async function manageTags(
   return results;
 }
 
-export function createManageTagsTool(vaultPath: string): Tool {
-  return {
+export function createManageTagsTool(vaults: Map<string, string>) {
+  return createTool<ManageTagsInput>({
     name: "manage-tags",
     description: `Add or remove tags from notes, supporting both frontmatter and inline tags.
 
 Examples:
-- Add tags: { "files": ["note.md"], "operation": "add", "tags": ["project", "status/active"] }
-- Remove tags: { "files": ["note.md"], "operation": "remove", "tags": ["project"] }
-- With options: { "files": ["note.md"], "operation": "add", "tags": ["status"], "options": { "location": "frontmatter" } }
-- Pattern matching: { "files": ["note.md"], "operation": "remove", "options": { "patterns": ["status/*"] } }
+- Add tags: { "vault": "vault1", "files": ["note.md"], "operation": "add", "tags": ["project", "status/active"] }
+- Remove tags: { "vault": "vault1", "files": ["note.md"], "operation": "remove", "tags": ["project"] }
+- With options: { "vault": "vault1", "files": ["note.md"], "operation": "add", "tags": ["status"], "options": { "location": "frontmatter" } }
+- Pattern matching: { "vault": "vault1", "files": ["note.md"], "operation": "remove", "options": { "patterns": ["status/*"] } }
 - INCORRECT: { "tags": ["#project"] } (don't include # symbol)`,
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        // Parse and validate input
-        const parsed = schema.parse(args);
-        
-        // Ensure defaults are set
-        const validated = {
-          files: parsed.files,
-          operation: parsed.operation,
-          tags: parsed.tags,
-          options: {
-            location: parsed.options?.location ?? 'both',
-            normalize: parsed.options?.normalize ?? true,
-            position: parsed.options?.position ?? 'end',
-            preserveChildren: parsed.options?.preserveChildren ?? false,
-            patterns: parsed.options?.patterns ?? []
-          }
-        };
-        
-        // Execute tag management operation
-        const results = await manageTags(vaultPath, validated);
+    schema,
+    handler: async (args, vaultPath, _vaultName) => {
+      const results = await manageTags(vaultPath, args);
         
         // Format detailed response message
         let message = '';
@@ -311,15 +300,6 @@ Examples:
             text: message.trim()
           }]
         };
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
     }
-  };
+  }, vaults);
 }

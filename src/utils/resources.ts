@@ -5,21 +5,33 @@ import { parseNote, extractTags } from "./tags.js";
 import { getAllMarkdownFiles, safeReadFile } from "./files.js";
 import { normalizePath, safeJoinPath } from "./path.js";
 
-export interface NoteMetadata {
-  title: string;
-  path: string;
-  tags: string[];
-  frontmatter: Record<string, any>;
-  links: string[];
-  lastModified: Date;
-  created?: Date;
-}
-
-export interface NoteResource {
+export interface VaultResource {
   uri: string;
   name: string;
   mimeType: string;
-  metadata?: NoteMetadata;
+  description?: string;
+  metadata?: {
+    path: string;
+    noteCount: number;
+    lastModified: Date;
+    tags: string[];
+    isAccessible: boolean;
+  };
+}
+
+export interface VaultListResource {
+  uri: string;
+  name: string;
+  mimeType: string;
+  description: string;
+  metadata?: {
+    totalVaults: number;
+    vaults: Array<{
+      name: string;
+      path: string;
+      isAccessible: boolean;
+    }>;
+  };
 }
 
 export interface NoteResourceTemplate {
@@ -55,10 +67,20 @@ function extractLinks(content: string): string[] {
   return Array.from(links);
 }
 
+interface NoteMetadata {
+  title: string;
+  path: string;
+  tags: string[];
+  frontmatter: Record<string, any>;
+  links: string[];
+  lastModified: Date;
+  created?: Date;
+}
+
 /**
  * Gets metadata for a note
  */
-export async function getNoteMetadata(notePath: string): Promise<NoteMetadata> {
+async function getNoteMetadata(notePath: string): Promise<NoteMetadata> {
   const content = await safeReadFile(notePath);
   if (!content) {
     throw new McpError(ErrorCode.InvalidRequest, `Note not found: ${notePath}`);
@@ -85,26 +107,92 @@ export async function getNoteMetadata(notePath: string): Promise<NoteMetadata> {
 }
 
 /**
- * Lists all notes in the vault with their metadata
+ * Gets metadata for a vault
  */
-export async function listNoteResources(vaultPath: string): Promise<NoteResource[]> {
+export async function getVaultMetadata(vaultPath: string): Promise<{
+  noteCount: number;
+  lastModified: Date;
+  tags: string[];
+}> {
   const files = await getAllMarkdownFiles(vaultPath);
-  const resources: NoteResource[] = [];
-
+  let lastModified = new Date(0);
+  const allTags = new Set<string>();
+  
   for (const file of files) {
     try {
       const metadata = await getNoteMetadata(file);
-      resources.push({
-        uri: `obsidian://${file}`,
-        name: metadata.title,
-        mimeType: "text/markdown",
-        metadata
-      });
+      if (metadata.lastModified > lastModified) {
+        lastModified = metadata.lastModified;
+      }
+      metadata.tags.forEach(tag => allTags.add(tag));
     } catch (error) {
-      // Log error but continue processing other files
       console.error(`Error processing ${file}:`, error);
     }
   }
+
+  return {
+    noteCount: files.length,
+    lastModified,
+    tags: Array.from(allTags)
+  };
+}
+
+/**
+ * Lists vault resources including a root resource that lists all vaults
+ */
+export async function listVaultResources(vaults: Map<string, string>): Promise<(VaultResource | VaultListResource)[]> {
+  const resources: (VaultResource | VaultListResource)[] = [];
+
+  // Add root resource that lists all vaults
+  const vaultList: VaultListResource = {
+    uri: "obsidian-vault://",
+    name: "Available Vaults",
+    mimeType: "application/json",
+    description: "List of all available Obsidian vaults and their access status",
+    metadata: {
+      totalVaults: vaults.size,
+      vaults: []
+    }
+  };
+
+  // Process each vault
+  for (const [vaultName, vaultPath] of vaults.entries()) {
+    try {
+      const metadata = await getVaultMetadata(vaultPath);
+      const isAccessible = true; // We can add actual accessibility checks here if needed
+
+      // Add to vault list
+      vaultList.metadata?.vaults.push({
+        name: vaultName,
+        path: vaultPath,
+        isAccessible
+      });
+
+      // Add individual vault resource
+      resources.push({
+        uri: `obsidian-vault://${vaultName}`,
+        name: vaultName,
+        mimeType: "application/json",
+        description: `Metadata and statistics for the ${vaultName} vault`,
+        metadata: {
+          path: vaultPath,
+          ...metadata,
+          isAccessible
+        }
+      });
+    } catch (error) {
+      console.error(`Error processing vault ${vaultName}:`, error);
+      // Still add to vault list but mark as inaccessible
+      vaultList.metadata?.vaults.push({
+        name: vaultName,
+        path: vaultPath,
+        isAccessible: false
+      });
+    }
+  }
+
+  // Add vault list as first resource
+  resources.unshift(vaultList);
 
   return resources;
 }
@@ -115,101 +203,46 @@ export async function listNoteResources(vaultPath: string): Promise<NoteResource
 export function getNoteResourceTemplates(): NoteResourceTemplate[] {
   return [
     {
-      uriTemplate: "obsidian://{path}",
-      name: "Note by path",
-      description: "Access a note by its path within the vault",
-      mimeType: "text/markdown"
-    },
-    {
-      uriTemplate: "obsidian://tag/{tag}",
-      name: "Notes by tag",
-      description: "Access all notes with a specific tag",
+      uriTemplate: "obsidian-vault://",
+      name: "List all vaults",
+      description: "Get a list of all available vaults and their access status",
       mimeType: "application/json"
     },
     {
-      uriTemplate: "obsidian://search/{query}",
-      name: "Search notes",
-      description: "Search notes by content",
+      uriTemplate: "obsidian-vault://{vault}",
+      name: "Vault metadata",
+      description: "Access metadata and statistics for a specific vault",
       mimeType: "application/json"
     }
   ];
 }
 
 /**
- * Reads a note resource by URI
+ * Reads a vault resource by URI
  */
-export async function readNoteResource(
-  vaultPath: string,
+export async function readVaultResource(
+  vaults: Map<string, string>,
   uri: string
 ): Promise<{ uri: string; mimeType: string; text: string }> {
-  // Handle different URI patterns
-  if (uri.startsWith("obsidian://tag/")) {
-    const tag = decodeURIComponent(uri.replace("obsidian://tag/", ""));
-    const files = await getAllMarkdownFiles(vaultPath);
-    const matchingNotes: NoteMetadata[] = [];
+  const vaultName = uri.replace("obsidian-vault://", "");
+  const vaultPath = vaults.get(vaultName);
 
-    for (const file of files) {
-      try {
-        const metadata = await getNoteMetadata(file);
-        if (metadata.tags.includes(tag)) {
-          matchingNotes.push(metadata);
-        }
-      } catch (error) {
-        console.error(`Error processing ${file}:`, error);
-      }
-    }
-
-    return {
-      uri,
-      mimeType: "application/json",
-      text: JSON.stringify(matchingNotes, null, 2)
-    };
-  }
-
-  if (uri.startsWith("obsidian://search/")) {
-    const query = decodeURIComponent(uri.replace("obsidian://search/", ""));
-    const files = await getAllMarkdownFiles(vaultPath);
-    const results = [];
-
-    for (const file of files) {
-      try {
-        const content = await safeReadFile(file);
-        if (content && content.toLowerCase().includes(query.toLowerCase())) {
-          const metadata = await getNoteMetadata(file);
-          results.push(metadata);
-        }
-      } catch (error) {
-        console.error(`Error processing ${file}:`, error);
-      }
-    }
-
-    return {
-      uri,
-      mimeType: "application/json",
-      text: JSON.stringify(results, null, 2)
-    };
-  }
-
-  // Default case: direct note access
-  const notePath = uri.replace("obsidian://", "");
-  const normalizedPath = normalizePath(notePath);
-  
-  // Verify path is within vault
-  if (!normalizedPath.startsWith(normalizePath(vaultPath))) {
+  if (!vaultPath) {
     throw new McpError(
       ErrorCode.InvalidRequest,
-      `Note path must be within vault: ${notePath}`
+      `Unknown vault: ${vaultName}`
     );
   }
 
-  const content = await safeReadFile(normalizedPath);
-  if (!content) {
-    throw new McpError(ErrorCode.InvalidRequest, `Note not found: ${notePath}`);
-  }
+  const metadata = await getVaultMetadata(vaultPath);
 
   return {
     uri,
-    mimeType: "text/markdown",
-    text: content
+    mimeType: "application/json",
+    text: JSON.stringify({
+      name: vaultName,
+      path: vaultPath,
+      ...metadata
+    }, null, 2)
   };
 }

@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { Tool, FileOperationResult } from "../../types.js";
+import { FileOperationResult } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js";
 import { ensureDirectory, fileExists } from "../../utils/files.js";
 import { createNoteExistsError, handleFsError } from "../../utils/errors.js";
 import { createToolResponse, formatFileResult } from "../../utils/responses.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
@@ -29,19 +29,15 @@ const schema = z.object({
     .describe("Optional subfolder path relative to vault root (e.g. 'journal/subfolder'). Use this for the path instead of including it in filename")
 }).strict();
 
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
-
 async function createNote(
+  args: z.infer<typeof schema>,
   vaultPath: string,
-  filename: string,
-  content: string,
-  folder?: string
+  _vaultName: string
 ): Promise<FileOperationResult> {
-  const sanitizedFilename = ensureMarkdownExtension(filename);
+  const sanitizedFilename = ensureMarkdownExtension(args.filename);
 
-  const notePath = folder
-    ? path.join(vaultPath, folder, sanitizedFilename)
+  const notePath = args.folder
+    ? path.join(vaultPath, args.folder, sanitizedFilename)
     : path.join(vaultPath, sanitizedFilename);
 
   // Validate path is within vault
@@ -58,7 +54,7 @@ async function createNote(
     }
 
     // File doesn't exist, proceed with creation
-    await fs.writeFile(notePath, content, 'utf8');
+    await fs.writeFile(notePath, args.content, 'utf8');
     
     return {
       success: true,
@@ -74,12 +70,10 @@ async function createNote(
   }
 }
 
-export function createCreateNoteTool(vaults: Map<string, string>): Tool {
-  if (!vaults || vaults.size === 0) {
-    throw new Error("At least one vault is required");
-  }
+type CreateNoteArgs = z.infer<typeof schema>;
 
-  return {
+export function createCreateNoteTool(vaults: Map<string, string>) {
+  return createTool<CreateNoteArgs>({
     name: "create-note",
     description: `Create a new note in the specified vault with markdown content.
 
@@ -87,32 +81,10 @@ Examples:
 - Root note: { "vault": "vault1", "filename": "note.md" }
 - Subfolder note: { "vault": "vault2", "filename": "note.md", "folder": "journal/2024" }
 - INCORRECT: { "filename": "journal/2024/note.md" } (don't put path in filename)`,
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        const validated = schemaHandler.parse(args);
-        const { vault, filename, content, folder } = validated;
-        
-        const vaultPath = vaults.get(vault);
-        if (!vaultPath) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
-          );
-        }
-
-        const result = await createNote(vaultPath, filename, content, folder);
-        
-        return createToolResponse(formatFileResult(result));
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
+    schema,
+    handler: async (args, vaultPath, vaultName) => {
+      const result = await createNote(args, vaultPath, vaultName);
+      return createToolResponse(formatFileResult(result));
     }
-  };
+  }, vaults);
 }

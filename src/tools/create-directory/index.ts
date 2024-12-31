@@ -1,9 +1,8 @@
 import { z } from "zod";
-import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
@@ -21,8 +20,7 @@ const schema = z.object({
     .describe("Create parent directories if they don't exist")
 }).strict();
 
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
+type CreateDirectoryInput = z.infer<typeof schema>;
 
 // Helper function to create directory
 async function createDirectory(
@@ -68,47 +66,21 @@ async function createDirectory(
   }
 }
 
-export function createCreateDirectoryTool(vaults: Map<string, string>): Tool {
-  if (!vaults || vaults.size === 0) {
-    throw new Error("At least one vault is required");
-  }
-
-  return {
+export function createCreateDirectoryTool(vaults: Map<string, string>) {
+  return createTool<CreateDirectoryInput>({
     name: "create-directory",
     description: "Create a new directory in the specified vault",
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        const validated = schemaHandler.parse(args);
-        const { vault, path: dirPath, recursive = true } = validated;
-        
-        const vaultPath = vaults.get(vault);
-        if (!vaultPath) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
-          );
-        }
-
-        const createdPath = await createDirectory(vaultPath, dirPath, recursive);
-        
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Successfully created directory at: ${createdPath}`
-            }
-          ]
-        };
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
+    schema,
+    handler: async (args, vaultPath, _vaultName) => {
+      const createdPath = await createDirectory(vaultPath, args.path, args.recursive ?? true);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Successfully created directory at: ${createdPath}`
+          }
+        ]
+      };
     }
-  };
+  }, vaults);
 }

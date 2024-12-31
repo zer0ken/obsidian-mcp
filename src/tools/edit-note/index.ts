@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Tool, FileOperationResult } from "../../types.js";
+import { FileOperationResult } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
@@ -7,7 +7,7 @@ import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js"
 import { fileExists } from "../../utils/files.js";
 import { createNoteNotFoundError, handleFsError } from "../../utils/errors.js";
 import { createToolResponse, formatFileResult } from "../../utils/responses.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 // Schema for delete operation
@@ -58,10 +58,6 @@ const schema = z.discriminatedUnion('operation', [deleteSchema, editSchema]);
 
 // Types
 type EditOperation = 'append' | 'prepend' | 'replace' | 'delete';
-type EditInput = z.infer<typeof schema>;
-
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
 
 async function editNote(
   vaultPath: string, 
@@ -198,8 +194,10 @@ async function editNote(
   }
 }
 
-export function createEditNoteTool(vaults: Map<string, string>): Tool {
-  return {
+type EditNoteArgs = z.infer<typeof schema>;
+
+export function createEditNoteTool(vaults: Map<string, string>) {
+  return createTool<EditNoteArgs>({
     name: "edit-note",
     description: `Edit an existing note in the specified vault.
 
@@ -207,35 +205,16 @@ Examples:
 - Root note: { "vault": "vault1", "filename": "note.md", "operation": "append", "content": "new content" }
 - Subfolder note: { "vault": "vault2", "filename": "note.md", "folder": "journal/2024", "operation": "append", "content": "new content" }
 - INCORRECT: { "filename": "journal/2024/note.md" } (don't put path in filename)`,
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        // Parse and validate input
-        const validated = schemaHandler.parse(args) as EditInput;
-        const { vault, filename, folder, operation, content } = validated;
-        
-        // Get vault path
-        const vaultPath = vaults.get(vault);
-        if (!vaultPath) {
-          throw new McpError(
-            ErrorCode.InvalidParams,
-            `Unknown vault: ${vault}. Available vaults: ${Array.from(vaults.keys()).join(', ')}`
-          );
-        }
-
-        // Execute the edit operation
-        const result = await editNote(vaultPath, filename, operation, content, folder);
-        
-        return createToolResponse(formatFileResult(result));
-      } catch (error: unknown) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
+    schema,
+    handler: async (args, vaultPath, _vaultName) => {
+      const result = await editNote(
+        vaultPath, 
+        args.filename, 
+        args.operation, 
+        'content' in args ? args.content : undefined, 
+        args.folder
+      );
+      return createToolResponse(formatFileResult(result));
     }
-  };
+  }, vaults);
 }
