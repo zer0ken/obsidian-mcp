@@ -8,20 +8,18 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
   McpError,
-  ErrorCode,
-  Request
+  ErrorCode
 } from "@modelcontextprotocol/sdk/types.js";
 import { RateLimiter, ConnectionMonitor, validateMessageSize } from "./utils/security.js";
 import { Tool } from "./types.js";
 import { z } from "zod";
-import { promises as fs } from "fs";
 import path from "path";
 import os from 'os';
+import fs from 'fs';
 import {
-  getNoteResourceTemplates,
   listVaultResources,
   readVaultResource
-} from "./utils/resources.js";
+} from "./resources/resources.js";
 import { listPrompts, getPrompt, registerPrompt } from "./utils/prompt-factory.js";
 import { listVaultsPrompt } from "./prompts/list-vaults/index.js";
 
@@ -41,10 +39,42 @@ export class ObsidianServer {
   private connectionMonitor: ConnectionMonitor;
 
   constructor(vaultConfigs: { name: string; path: string }[]) {
+    if (!vaultConfigs || vaultConfigs.length === 0) {
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        'No vault configurations provided. At least one valid Obsidian vault is required.'
+      );
+    }
+
     // Initialize vaults
     vaultConfigs.forEach(config => {
       const expandedPath = expandHome(config.path);
-      this.vaults.set(config.name, path.resolve(expandedPath));
+      const resolvedPath = path.resolve(expandedPath);
+      
+      // Check if .obsidian directory exists
+      const obsidianConfigPath = path.join(resolvedPath, '.obsidian');
+      try {
+        const stats = fs.statSync(obsidianConfigPath);
+        if (!stats.isDirectory()) {
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid Obsidian vault at ${config.path}: .obsidian exists but is not a directory`
+          );
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          throw new McpError(
+            ErrorCode.InvalidRequest,
+            `Invalid Obsidian vault at ${config.path}: Missing .obsidian directory. Please open this folder in Obsidian first to initialize it.`
+          );
+        }
+        throw new McpError(
+          ErrorCode.InvalidRequest,
+          `Error accessing vault at ${config.path}: ${(error as Error).message}`
+        );
+      }
+
+      this.vaults.set(config.name, resolvedPath);
     });
     this.server = new Server(
       {
@@ -69,11 +99,14 @@ export class ObsidianServer {
 
     this.setupHandlers();
 
-    // Setup connection monitoring
+    // Setup connection monitoring with grace period for initialization
     this.connectionMonitor.start(() => {
       console.error("Connection timeout detected");
       this.server.close();
     });
+    
+    // Update activity during initialization
+    this.connectionMonitor.updateActivity();
 
     // Setup error handler
     this.server.onerror = (error) => {
@@ -82,7 +115,9 @@ export class ObsidianServer {
   }
 
   registerTool<T>(tool: Tool<T>) {
+    console.error(`Registering tool: ${tool.name}`);
     this.tools.set(tool.name, tool);
+    console.error(`Current tools: ${Array.from(this.tools.keys()).join(', ')}`);
   }
 
   private validateRequest(request: any) {
@@ -147,7 +182,7 @@ export class ObsidianServer {
       const resources = await listVaultResources(this.vaults);
       return {
         resources,
-        resourceTemplates: getNoteResourceTemplates()
+        resourceTemplates: []
       };
     });
 
@@ -163,25 +198,6 @@ export class ObsidianServer {
         throw new McpError(ErrorCode.InvalidParams, "Invalid URI format. Only vault resources are supported.");
       }
 
-      // Handle root vault list
-      if (uri === 'obsidian-vault://') {
-        return {
-          contents: [{
-            uri,
-            mimeType: "application/json",
-            text: JSON.stringify({
-              totalVaults: this.vaults.size,
-              vaults: Array.from(this.vaults.entries()).map(([name, path]) => ({
-                name,
-                path,
-                isAccessible: true
-              }))
-            }, null, 2)
-          }]
-        };
-      }
-
-      // Handle individual vault resources
       return {
         contents: [await readVaultResource(this.vaults, uri)]
       };
@@ -252,12 +268,12 @@ export class ObsidianServer {
   async start() {
     const transport = new StdioServerTransport();
     await this.server.connect(transport);
-    console.log("Obsidian MCP Server running on stdio");
+    console.error("Obsidian MCP Server running on stdio");
   }
 
   async stop() {
     this.connectionMonitor.stop();
     await this.server.close();
-    console.log("Obsidian MCP Server stopped");
+    console.error("Obsidian MCP Server stopped");
   }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { ObsidianServer } from "./server.js";
 import { createCreateNoteTool } from "./tools/create-note/index.js";
+import { createListAvailableVaultsTool } from "./tools/list-available-vaults/index.js";
 import { createEditNoteTool } from "./tools/edit-note/index.js";
 import { createSearchVaultTool } from "./tools/search-vault/index.js";
 import { createMoveNoteTool } from "./tools/move-note/index.js";
@@ -17,6 +18,7 @@ import os from "os";
 import { promises as fs, constants as fsConstants } from "fs";
 import { exec as execCallback } from "child_process";
 import { promisify } from "util";
+import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 // Promisify exec for cleaner async/await usage
 const exec = promisify(execCallback);
@@ -32,7 +34,7 @@ async function main() {
 
   const vaultArgs = process.argv.slice(2);
   if (vaultArgs.length === 0) {
-    console.error(`
+    const helpMessage = `
 Obsidian MCP Server - Multi-vault Support
 
 Usage: obsidian-mcp <vault1_path> [vault2_path ...]
@@ -89,7 +91,21 @@ Examples:
   obsidian-mcp //server/share/vault       # ❌ Network path
   obsidian-mcp /mnt/network/vault         # ❌ Network mount
   obsidian-mcp ~/symlink-to-vault         # ❌ External symlink
-`);
+`;
+
+    // Log help message to stderr for user reference
+    console.error(helpMessage);
+
+    // Write MCP error to stdout
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      error: {
+        code: ErrorCode.InvalidRequest,
+        message: "No vault paths provided. Please provide at least one valid Obsidian vault path."
+      },
+      id: null
+    }));
+
     process.exit(1);
   }
 
@@ -341,11 +357,23 @@ Examples:
     const uniquePaths = new Set<string>();
     normalizedPaths.forEach((normalizedPath, index) => {
       if (uniquePaths.has(normalizedPath)) {
-        console.error(`Error: Duplicate vault path provided:`);
-        console.error(`  Original paths:`);
-        console.error(`    1: ${paths[index]}`);
-        console.error(`    2: ${paths[normalizedPaths.indexOf(normalizedPath)]}`);
-        console.error(`  Both resolve to: ${normalizedPath}`);
+        const errorMessage = `Duplicate vault path provided:\n` +
+          `  Original paths:\n` +
+          `    1: ${paths[index]}\n` +
+          `    2: ${paths[normalizedPaths.indexOf(normalizedPath)]}\n` +
+          `  Both resolve to: ${normalizedPath}`;
+        
+        console.error(`Error: ${errorMessage}`);
+        
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: ErrorCode.InvalidRequest,
+            message: errorMessage
+          },
+          id: null
+        }));
+        
         process.exit(1);
       }
       uniquePaths.add(normalizedPath);
@@ -356,13 +384,25 @@ Examples:
       for (let j = i + 1; j < normalizedPaths.length; j++) {
         if (isParentPath(normalizedPaths[i], normalizedPaths[j]) || 
             isParentPath(normalizedPaths[j], normalizedPaths[i])) {
-          console.error(`Error: Vault paths cannot overlap:`);
-          console.error(`  Path 1: ${paths[i]}`);
-          console.error(`  Path 2: ${paths[j]}`);
-          console.error(`  (One vault directory cannot be inside another)`);
-          console.error(`  Normalized paths:`);
-          console.error(`    1: ${normalizedPaths[i]}`);
-          console.error(`    2: ${normalizedPaths[j]}`);
+          const errorMessage = `Vault paths cannot overlap:\n` +
+            `  Path 1: ${paths[i]}\n` +
+            `  Path 2: ${paths[j]}\n` +
+            `  (One vault directory cannot be inside another)\n` +
+            `  Normalized paths:\n` +
+            `    1: ${normalizedPaths[i]}\n` +
+            `    2: ${normalizedPaths[j]}`;
+          
+          console.error(`Error: ${errorMessage}`);
+          
+          process.stdout.write(JSON.stringify({
+            jsonrpc: "2.0",
+            error: {
+              code: ErrorCode.InvalidRequest,
+              message: errorMessage
+            },
+            id: null
+          }));
+          
           process.exit(1);
         }
       }
@@ -384,7 +424,18 @@ Examples:
 
       // Validate path is absolute and safe
       if (!path.isAbsolute(absolutePath)) {
-        console.error(`Error: Vault path must be absolute: ${vaultPath}`);
+        const errorMessage = `Vault path must be absolute: ${vaultPath}`;
+        console.error(`Error: ${errorMessage}`);
+        
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: ErrorCode.InvalidRequest,
+            message: errorMessage
+          },
+          id: null
+        }));
+        
         process.exit(1);
       }
 
@@ -395,21 +446,45 @@ Examples:
       ]);
 
       if (localPathIssue) {
-        console.error(`Error: Invalid vault path (${localPathIssue}): ${vaultPath}`);
-        console.error(`For reliability and security reasons, vault paths must:`);
-        console.error(`- Be on a local filesystem`);
-        console.error(`- Not use network drives or mounts`);
-        console.error(`- Not contain symlinks that point outside their directory`);
+        const errorMessage = `Invalid vault path (${localPathIssue}): ${vaultPath}\n` +
+          `For reliability and security reasons, vault paths must:\n` +
+          `- Be on a local filesystem\n` +
+          `- Not use network drives or mounts\n` +
+          `- Not contain symlinks that point outside their directory`;
+        
+        console.error(`Error: ${errorMessage}`);
+        
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: ErrorCode.InvalidRequest,
+            message: errorMessage
+          },
+          id: null
+        }));
+        
         process.exit(1);
       }
 
       if (suspiciousReason) {
-        console.error(`Error: Invalid vault path (${suspiciousReason}): ${vaultPath}`);
-        console.error(`For security reasons, vault paths cannot:`);
-        console.error(`- Point to system directories`);
-        console.error(`- Use hidden directories (except .obsidian)`);
-        console.error(`- Point to the home directory root`);
-        console.error(`Please choose a dedicated directory for your vault`);
+        const errorMessage = `Invalid vault path (${suspiciousReason}): ${vaultPath}\n` +
+          `For security reasons, vault paths cannot:\n` +
+          `- Point to system directories\n` +
+          `- Use hidden directories (except .obsidian)\n` +
+          `- Point to the home directory root\n` +
+          `Please choose a dedicated directory for your vault`;
+        
+        console.error(`Error: ${errorMessage}`);
+        
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: ErrorCode.InvalidRequest,
+            message: errorMessage
+          },
+          id: null
+        }));
+        
         process.exit(1);
       }
 
@@ -417,7 +492,18 @@ Examples:
         // Check if path exists and is a directory
         const stats = await fs.stat(absolutePath);
         if (!stats.isDirectory()) {
-          console.error(`Error: Vault path must be a directory: ${vaultPath}`);
+          const errorMessage = `Vault path must be a directory: ${vaultPath}`;
+          console.error(`Error: ${errorMessage}`);
+          
+          process.stdout.write(JSON.stringify({
+            jsonrpc: "2.0",
+            error: {
+              code: ErrorCode.InvalidRequest,
+              message: errorMessage
+            },
+            id: null
+          }));
+          
           process.exit(1);
         }
 
@@ -432,9 +518,21 @@ Examples:
           // Check .obsidian directory
           const configStats = await fs.stat(obsidianConfigPath);
           if (!configStats.isDirectory()) {
-            console.error(`Error: Invalid Obsidian vault configuration in ${vaultPath}`);
-            console.error(`The .obsidian folder exists but is not a directory`);
-            console.error(`Try removing it and reopening the vault in Obsidian`);
+            const errorMessage = `Invalid Obsidian vault configuration in ${vaultPath}\n` +
+              `The .obsidian folder exists but is not a directory\n` +
+              `Try removing it and reopening the vault in Obsidian`;
+            
+            console.error(`Error: ${errorMessage}`);
+            
+            process.stdout.write(JSON.stringify({
+              jsonrpc: "2.0",
+              error: {
+                code: ErrorCode.InvalidRequest,
+                message: errorMessage
+              },
+              id: null
+            }));
+            
             process.exit(1);
           }
 
@@ -443,42 +541,99 @@ Examples:
           
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            console.error(`Error: Not a valid Obsidian vault (${vaultPath})`);
-            console.error(`Missing or incomplete .obsidian configuration`);
-            console.error(`\nTo fix this:`);
-            console.error(`1. Open Obsidian`);
-            console.error(`2. Click "Open folder as vault"`);
-            console.error(`3. Select the directory: ${absolutePath}`);
-            console.error(`4. Wait for Obsidian to initialize the vault`);
-            console.error(`5. Try running this command again`);
+            const errorMessage = `Not a valid Obsidian vault (${vaultPath})\n` +
+              `Missing or incomplete .obsidian configuration\n\n` +
+              `To fix this:\n` +
+              `1. Open Obsidian\n` +
+              `2. Click "Open folder as vault"\n` +
+              `3. Select the directory: ${absolutePath}\n` +
+              `4. Wait for Obsidian to initialize the vault\n` +
+              `5. Try running this command again`;
+            
+            console.error(`Error: ${errorMessage}`);
+            
+            process.stdout.write(JSON.stringify({
+              jsonrpc: "2.0",
+              error: {
+                code: ErrorCode.InvalidRequest,
+                message: errorMessage
+              },
+              id: null
+            }));
           } else {
-            console.error(`Error checking Obsidian configuration in ${vaultPath}:`, error);
+            const errorMessage = `Error checking Obsidian configuration in ${vaultPath}: ${error instanceof Error ? error.message : String(error)}`;
+            console.error(`Error: ${errorMessage}`);
+            
+            process.stdout.write(JSON.stringify({
+              jsonrpc: "2.0",
+              error: {
+                code: ErrorCode.InternalError,
+                message: errorMessage
+              },
+              id: null
+            }));
           }
           process.exit(1);
         }
 
         return absolutePath;
       } catch (error) {
+        let errorMessage: string;
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-          console.error(`Error: Vault directory does not exist: ${vaultPath}`);
+          errorMessage = `Vault directory does not exist: ${vaultPath}`;
         } else if ((error as NodeJS.ErrnoException).code === 'EACCES') {
-          console.error(`Error: No permission to access vault directory: ${vaultPath}`);
+          errorMessage = `No permission to access vault directory: ${vaultPath}`;
         } else {
-          console.error(`Error accessing vault path ${vaultPath}:`, error);
+          errorMessage = `Error accessing vault path ${vaultPath}: ${error instanceof Error ? error.message : String(error)}`;
         }
+        
+        console.error(`Error: ${errorMessage}`);
+        
+        process.stdout.write(JSON.stringify({
+          jsonrpc: "2.0",
+          error: {
+            code: ErrorCode.InvalidRequest,
+            message: errorMessage
+          },
+          id: null
+        }));
+        
         process.exit(1);
       }
     } catch (error) {
-      console.error(`Error processing vault path ${vaultPath}:`, error);
+      const errorMessage = `Error processing vault path ${vaultPath}: ${error instanceof Error ? error.message : String(error)}`;
+      console.error(`Error: ${errorMessage}`);
+      
+      process.stdout.write(JSON.stringify({
+        jsonrpc: "2.0",
+        error: {
+          code: ErrorCode.InternalError,
+          message: errorMessage
+        },
+        id: null
+      }));
+      
       process.exit(1);
     }
   }));
 
   // Validate number of vaults
   if (vaultArgs.length > MAX_VAULTS) {
-    console.error(`Error: Too many vaults specified (${vaultArgs.length})`);
-    console.error(`Maximum number of vaults allowed: ${MAX_VAULTS}`);
-    console.error(`This limit helps prevent performance issues and resource exhaustion`);
+    const errorMessage = `Too many vaults specified (${vaultArgs.length})\n` +
+      `Maximum number of vaults allowed: ${MAX_VAULTS}\n` +
+      `This limit helps prevent performance issues and resource exhaustion`;
+    
+    console.error(`Error: ${errorMessage}`);
+    
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      error: {
+        code: ErrorCode.InvalidRequest,
+        message: errorMessage
+      },
+      id: null
+    }));
+    
     process.exit(1);
   }
 
@@ -486,8 +641,20 @@ Examples:
 
   // Check if we have any valid paths
   if (normalizedPaths.length === 0) {
-    console.error("\nError: No valid vault paths provided");
-    console.error("Make sure at least one path points to a valid Obsidian vault");
+    const errorMessage = `No valid vault paths provided\n` +
+      `Make sure at least one path points to a valid Obsidian vault`;
+    
+    console.error(`\nError: ${errorMessage}`);
+    
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      error: {
+        code: ErrorCode.InvalidRequest,
+        message: errorMessage
+      },
+      id: null
+    }));
+    
     process.exit(1);
   } else if (normalizedPaths.length < vaultArgs.length) {
     console.error(`\nWarning: Only ${normalizedPaths.length} out of ${vaultArgs.length} paths were valid`);
@@ -538,20 +705,34 @@ Examples:
     });
   });
 
-  // Log final vault configuration
-  console.log("\nSuccessfully configured vaults:");
+  // Log final vault configuration to stderr
+  console.error("\nSuccessfully configured vaults:");
   uniqueVaults.forEach(vault => {
-    console.log(`- ${vault.name}`);
-    console.log(`  Path: ${vault.path}`);
+    console.error(`- ${vault.name}`);
+    console.error(`  Path: ${vault.path}`);
   });
-  console.log(`\nTotal vaults: ${uniqueVaults.length}`);
-  console.log(""); // Empty line for readability
+  console.error(`\nTotal vaults: ${uniqueVaults.length}`);
+  console.error(""); // Empty line for readability
+  console.error("CHECKPOINT")
 
   try {
-    console.log(`Starting Obsidian MCP Server with ${uniqueVaults.length} vault${uniqueVaults.length > 1 ? 's' : ''}...`);
+    if (uniqueVaults.length === 0) {
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        'No valid Obsidian vaults provided. Please provide at least one valid vault path.\n\n' +
+        'Example usage:\n' +
+        '  obsidian-mcp ~/Documents/Obsidian/MyVault\n\n' +
+        'The vault directory must:\n' +
+        '- Exist and be accessible\n' +
+        '- Contain a .obsidian directory (initialize by opening in Obsidian first)\n' +
+        '- Have read/write permissions'
+      );
+    }
+
+    console.error(`Starting Obsidian MCP Server with ${uniqueVaults.length} vault${uniqueVaults.length > 1 ? 's' : ''}...`);
     
     const server = new ObsidianServer(uniqueVaults);
-    console.log("Server initialized successfully");
+    console.error("Server initialized successfully");
 
     // Handle graceful shutdown
     let isShuttingDown = false;
@@ -559,10 +740,10 @@ Examples:
       if (isShuttingDown) return;
       isShuttingDown = true;
 
-      console.log(`\nReceived ${signal}, shutting down...`);
+      console.error(`\nReceived ${signal}, shutting down...`);
       try {
         await server.stop();
-        console.log("Server stopped cleanly");
+        console.error("Server stopped cleanly");
         process.exit(0);
       } catch (error) {
         console.error("Error during shutdown:", error);
@@ -580,6 +761,7 @@ Examples:
     // Register tools with unique vault names
     const tools = [
       createCreateNoteTool(vaultsMap),
+      createListAvailableVaultsTool(vaultsMap),
       createEditNoteTool(vaultsMap),
       createSearchVaultTool(vaultsMap),
       createMoveNoteTool(vaultsMap),
@@ -604,18 +786,34 @@ Examples:
     console.error("All tools registered successfully");
     console.error("Server starting...\n");
 
+    // Start the server without logging to stdout
     await server.start();
   } catch (error) {
+    console.log(error instanceof Error ? error.message : String(error));
+    // Format error for MCP protocol
+    const mcpError = error instanceof McpError ? error : new McpError(
+      ErrorCode.InternalError,
+      error instanceof Error ? error.message : String(error)
+    );
+
+    // Write error in MCP protocol format to stdout
+    process.stdout.write(JSON.stringify({
+      jsonrpc: "2.0",
+      error: {
+        code: mcpError.code,
+        message: mcpError.message
+      },
+      id: null
+    }));
+
+    // Log details to stderr for debugging
     console.error("\nFatal error starting server:");
-    if (error instanceof Error) {
-      console.error(`${error.name}: ${error.message}`);
-      if (error.stack) {
-        console.error("\nStack trace:");
-        console.error(error.stack.split('\n').slice(1).join('\n'));
-      }
-    } else {
-      console.error(error);
+    console.error(mcpError.message);
+    if (error instanceof Error && error.stack) {
+      console.error("\nStack trace:");
+      console.error(error.stack.split('\n').slice(1).join('\n'));
     }
+    
     process.exit(1);
   }
 }

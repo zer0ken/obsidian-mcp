@@ -12,6 +12,11 @@
     "README.md",
     "LICENSE"
   ],
+  "exports": {
+    ".": "./build/main.js",
+    "./utils/*": "./build/utils/*.js",
+    "./resources/*": "./build/resources/*.js"
+  },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4"
   },
@@ -26,7 +31,7 @@
     "typescript": "^5.0.0"
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').chmodSync('build/main.js', 0o755)\"",
+    "build": "tsc && chmod +x build/main.js",
     "start": "node build/main.js",
     "prepublishOnly": "npm run build",
     "inspect": "npx @modelcontextprotocol/inspector node ./build/main.js"

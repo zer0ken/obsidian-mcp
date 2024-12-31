@@ -7,7 +7,7 @@ import { VaultResolver } from "./vault-resolver.js";
 export interface BaseToolConfig<T> {
   name: string;
   description: string;
-  schema: z.ZodType<any>;
+  schema?: z.ZodType<any>;
   handler: (
     args: T,
     sourcePath: string,
@@ -26,15 +26,15 @@ export function createTool<T extends { vault: string }>(
   vaults: Map<string, string>
 ): Tool {
   const vaultResolver = new VaultResolver(vaults);
-  const schemaHandler = createSchemaHandler(config.schema);
+  const schemaHandler = config.schema ? createSchemaHandler(config.schema) : undefined;
 
   return {
     name: config.name,
     description: config.description,
-    inputSchema: schemaHandler,
+    inputSchema: schemaHandler || createSchemaHandler(z.object({})),
     handler: async (args) => {
       try {
-        const validated = schemaHandler.parse(args) as T;
+        const validated = schemaHandler ? schemaHandler.parse(args) as T : {} as T;
         const { vaultPath, vaultName } = vaultResolver.resolveVault(validated.vault);
         return await config.handler(validated, vaultPath, vaultName);
       } catch (error) {
@@ -44,6 +44,29 @@ export function createTool<T extends { vault: string }>(
             `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
           );
         }
+        throw error;
+      }
+    }
+  };
+}
+
+/**
+ * Creates a tool that requires no arguments
+ */
+export function createToolNoArgs(
+  config: Omit<BaseToolConfig<{}>, "schema">,
+  vaults: Map<string, string>
+): Tool {
+  const vaultResolver = new VaultResolver(vaults);
+
+  return {
+    name: config.name,
+    description: config.description,
+    inputSchema: createSchemaHandler(z.object({})),
+    handler: async () => {
+      try {
+        return await config.handler({}, "", "");
+      } catch (error) {
         throw error;
       }
     }
