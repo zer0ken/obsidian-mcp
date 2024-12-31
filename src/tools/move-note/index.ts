@@ -1,16 +1,18 @@
 import { z } from "zod";
-import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { ensureMarkdownExtension, validateVaultPath } from "../../utils/path.js";
 import { fileExists, ensureDirectory } from "../../utils/files.js";
 import { updateVaultLinks } from "../../utils/links.js";
 import { createNoteExistsError, createNoteNotFoundError, handleFsError } from "../../utils/errors.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the note"),
   source: z.string()
     .min(1, "Source path cannot be empty")
     .refine(name => !path.isAbsolute(name), 
@@ -23,17 +25,15 @@ const schema = z.object({
     .describe("Destination path relative to vault root (e.g., 'new-folder/new-name.md')")
 }).strict();
 
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
+type MoveNoteArgs = z.infer<typeof schema>;
 
 async function moveNote(
-  vaultPath: string,
-  sourcePath: string,
-  destinationPath: string
+  args: MoveNoteArgs,
+  vaultPath: string
 ): Promise<string> {
   // Ensure paths are relative to vault
-  const fullSourcePath = path.join(vaultPath, sourcePath);
-  const fullDestPath = path.join(vaultPath, destinationPath);
+  const fullSourcePath = path.join(vaultPath, args.source);
+  const fullDestPath = path.join(vaultPath, args.destination);
 
   // Validate paths are within vault
   validateVaultPath(vaultPath, fullSourcePath);
@@ -42,12 +42,12 @@ async function moveNote(
   try {
     // Check if source exists
     if (!await fileExists(fullSourcePath)) {
-      throw createNoteNotFoundError(sourcePath);
+      throw createNoteNotFoundError(args.source);
     }
 
     // Check if destination already exists
     if (await fileExists(fullDestPath)) {
-      throw createNoteExistsError(destinationPath);
+      throw createNoteExistsError(args.destination);
     }
 
     // Ensure destination directory exists
@@ -56,11 +56,11 @@ async function moveNote(
 
     // Move the file
     await fs.rename(fullSourcePath, fullDestPath);
-
-    // Update links in all markdown files
-    const updatedFiles = await updateVaultLinks(vaultPath, sourcePath, destinationPath);
-
-    return `Successfully moved note from "${sourcePath}" to "${destinationPath}"\n` +
+    
+    // Update links in the vault
+    const updatedFiles = await updateVaultLinks(vaultPath, args.source, args.destination);
+    
+    return `Successfully moved note from "${args.source}" to "${args.destination}"\n` +
            `Updated links in ${updatedFiles} file${updatedFiles === 1 ? '' : 's'}`;
   } catch (error) {
     if (error instanceof McpError) {
@@ -70,43 +70,28 @@ async function moveNote(
   }
 }
 
-export function createMoveNoteTool(vaultPath: string): Tool {
-  if (!vaultPath) {
-    throw new Error("Vault path is required");
-  }
-
-  return {
+export function createMoveNoteTool(vaults: Map<string, string>) {
+  return createTool<MoveNoteArgs>({
     name: "move-note",
     description: "Move/rename a note while preserving links",
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        const validated = schemaHandler.parse(args);
-        const { source, destination } = validated;
-        
-        // Ensure .md extension
-        const sourcePath = ensureMarkdownExtension(source);
-        const destPath = ensureMarkdownExtension(destination);
-        
-        const resultMessage = await moveNote(vaultPath, sourcePath, destPath);
-        
-        return {
-          content: [
-            {
-              type: "text",
-              text: resultMessage
-            }
-          ]
-        };
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
-      }
+    schema,
+    handler: async (args, vaultPath, vaultName) => {
+      const argsWithExt: MoveNoteArgs = {
+        vault: args.vault,
+        source: ensureMarkdownExtension(args.source),
+        destination: ensureMarkdownExtension(args.destination)
+      };
+      
+      const resultMessage = await moveNote(argsWithExt, vaultPath);
+      
+      return {
+        content: [
+          {
+            type: "text",
+            text: resultMessage
+          }
+        ]
+      };
     }
-  };
+  }, vaults);
 }

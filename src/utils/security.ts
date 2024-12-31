@@ -46,9 +46,12 @@ export class ConnectionMonitor {
   private lastActivity: number = Date.now();
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private readonly timeout: number;
+  private readonly gracePeriod: number;
+  private initialized: boolean = false;
 
-  constructor(timeout: number = 60000) { // 60 second timeout for local usage
+  constructor(timeout: number = 60000, gracePeriod: number = 30000) { // 60s timeout, 30s grace period
     this.timeout = timeout;
+    this.gracePeriod = gracePeriod;
   }
 
   updateActivity() {
@@ -56,11 +59,15 @@ export class ConnectionMonitor {
   }
 
   start(onTimeout: () => void) {
-    this.healthCheckInterval = setInterval(() => {
-      if (Date.now() - this.lastActivity > this.timeout) {
-        onTimeout();
-      }
-    }, 10000); // Check every 10 seconds
+    // Start monitoring after grace period
+    setTimeout(() => {
+      this.initialized = true;
+      this.healthCheckInterval = setInterval(() => {
+        if (Date.now() - this.lastActivity > this.timeout) {
+          onTimeout();
+        }
+      }, 10000); // Check every 10 seconds
+    }, this.gracePeriod);
   }
 
   stop() {
