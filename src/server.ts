@@ -78,8 +78,8 @@ export class ObsidianServer {
     });
     this.server = new Server(
       {
-        name: "obsidian-vault",
-        version: "1.0.0"
+        name: "obsidian-mcp",
+        version: "1.0.4"
       },
       {
         capabilities: {

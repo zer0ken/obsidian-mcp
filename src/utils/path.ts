@@ -14,10 +14,46 @@ export function normalizePath(inputPath: string): string {
       `Invalid path: ${inputPath}`
     );
   }
-  
+
   try {
-    const normalized = path.normalize(inputPath);
-    return path.resolve(normalized);
+    // Handle Windows paths
+    let normalized = inputPath;
+
+    // Validate paths for invalid characters in filename portion
+    const filename = normalized.split(/[\\/]/).pop() || '';
+    if (/[<>"|?*]/.test(filename)) {
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        `Filename contains invalid characters: ${filename}`
+      );
+    }
+    
+    // Preserve UNC paths
+    if (normalized.startsWith('\\\\')) {
+      // Convert to forward slashes but preserve exactly two leading slashes
+      normalized = '//' + normalized.slice(2).replace(/\\/g, '/');
+      return normalized;
+    }
+
+    // Handle Windows drive letters
+    if (/^[a-zA-Z]:[\\/]/.test(normalized)) {
+      // Convert to forward slashes for consistency
+      normalized = normalized.replace(/\\/g, '/');
+      return normalized;
+    }
+
+    // Handle relative paths
+    if (normalized.startsWith('./') || normalized.startsWith('../')) {
+      normalized = path.normalize(normalized);
+      return path.resolve(normalized);
+    }
+
+    // Default normalization for other paths
+    normalized = normalized.replace(/\\/g, '/');
+    if (normalized.startsWith('./') || normalized.startsWith('../')) {
+      return path.resolve(normalized);
+    }
+    return normalized;
   } catch (error) {
     throw new McpError(
       ErrorCode.InvalidRequest,
