@@ -20,9 +20,9 @@ export function normalizePath(inputPath: string): string {
     // Handle Windows paths
     let normalized = inputPath;
 
-    // Validate paths for invalid characters in filename portion
+    // Only validate filename portion for invalid Windows characters, allowing : for drive letters
     const filename = normalized.split(/[\\/]/).pop() || '';
-    if (/[<>"|?*]/.test(filename)) {
+    if (/[<>"|?*]/.test(filename) || (/:/.test(filename) && !/^[A-Za-z]:$/.test(filename))) {
       throw new McpError(
         ErrorCode.InvalidRequest,
         `Filename contains invalid characters: ${filename}`
@@ -45,28 +45,17 @@ export function normalizePath(inputPath: string): string {
       return normalized;
     }
 
-    // Validate path doesn't point to system directories
-    const systemDirs = [
+    // Only restrict critical system directories
+    const restrictedDirs = [
       'C:\\Windows',
       'C:\\Program Files',
       'C:\\Program Files (x86)',
-      'C:\\ProgramData',
-      'C:\\Users\\All Users',
-      'C:\\Users\\Default',
-      'C:\\Users\\Public'
+      'C:\\ProgramData'
     ];
-    if (systemDirs.some(dir => normalized.startsWith(dir))) {
+    if (restrictedDirs.some(dir => normalized.toLowerCase().startsWith(dir.toLowerCase()))) {
       throw new McpError(
         ErrorCode.InvalidRequest,
-        `Path points to system directory: ${normalized}`
-      );
-    }
-
-    // Validate path isn't in home directory root
-    if (normalized === '~' || normalized === 'C:\\Users\\' + process.env.USERNAME) {
-      throw new McpError(
-        ErrorCode.InvalidRequest,
-        `Path points to home directory root: ${normalized}`
+        `Path points to restricted system directory: ${normalized}`
       );
     }
 

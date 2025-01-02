@@ -162,15 +162,30 @@ Examples:
     if (process.platform === 'win32') {
       // Windows-specific checks
       const winReservedNames = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
-      const parts = vaultPath.split(/[\/\\]/);
-      if (parts.some(part => winReservedNames.test(part))) {
+      const pathParts = vaultPath.split(/[\/\\]/);
+      if (pathParts.some(part => winReservedNames.test(part))) {
         return 'Contains Windows reserved names (CON, PRN, etc.)';
       }
 
-      // Windows invalid characters
-      const winInvalidChars = /[<>:"|?*]/;
-      if (winInvalidChars.test(vaultPath)) {
-        return 'Contains characters not allowed on Windows (<>:"|?*)';
+      // Windows invalid characters (allowing : for drive letters)
+      // First check if this is a Windows path with a drive letter
+      if (/^[A-Za-z]:[\/\\]/.test(vaultPath)) {
+        // Skip the drive letter part and check the rest of the path
+        const pathWithoutDrive = vaultPath.slice(2);
+        const components = pathWithoutDrive.split(/[\/\\]/);
+        for (const part of components) {
+          if (/[<>:"|?*]/.test(part)) {
+            return 'Contains characters not allowed on Windows (<>:"|?*)';
+          }
+        }
+      } else {
+        // No drive letter, check all components normally
+        const components = vaultPath.split(/[\/\\]/);
+        for (const part of components) {
+          if (/[<>:"|?*]/.test(part)) {
+            return 'Contains characters not allowed on Windows (<>:"|?*)';
+          }
+        }
       }
 
       // Windows device paths
