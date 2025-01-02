@@ -1,4 +1,5 @@
 import path from "path";
+import fs from "fs/promises";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 
 /**
@@ -37,9 +38,36 @@ export function normalizePath(inputPath: string): string {
 
     // Handle Windows drive letters
     if (/^[a-zA-Z]:[\\/]/.test(normalized)) {
+      // Normalize path while preserving drive letter
+      normalized = path.normalize(normalized);
       // Convert to forward slashes for consistency
       normalized = normalized.replace(/\\/g, '/');
       return normalized;
+    }
+
+    // Validate path doesn't point to system directories
+    const systemDirs = [
+      'C:\\Windows',
+      'C:\\Program Files',
+      'C:\\Program Files (x86)',
+      'C:\\ProgramData',
+      'C:\\Users\\All Users',
+      'C:\\Users\\Default',
+      'C:\\Users\\Public'
+    ];
+    if (systemDirs.some(dir => normalized.startsWith(dir))) {
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        `Path points to system directory: ${normalized}`
+      );
+    }
+
+    // Validate path isn't in home directory root
+    if (normalized === '~' || normalized === 'C:\\Users\\' + process.env.USERNAME) {
+      throw new McpError(
+        ErrorCode.InvalidRequest,
+        `Path points to home directory root: ${normalized}`
+      );
     }
 
     // Handle relative paths
@@ -68,10 +96,33 @@ export function normalizePath(inputPath: string): string {
  * @param targetPath - The target path to check
  * @returns True if target is within base path, false otherwise
  */
-export function checkPathSafety(basePath: string, targetPath: string): boolean {
+export async function checkPathSafety(basePath: string, targetPath: string): Promise<boolean> {
   const resolvedPath = normalizePath(targetPath);
   const resolvedBasePath = normalizePath(basePath);
-  return resolvedPath.startsWith(resolvedBasePath);
+
+  try {
+    // Check real path for symlinks
+    const realPath = await fs.realpath(resolvedPath);
+    const normalizedReal = normalizePath(realPath);
+    
+    // Check if real path is within base path
+    if (!normalizedReal.startsWith(resolvedBasePath)) {
+      return false;
+    }
+
+    // Check if original path is within base path
+    return resolvedPath.startsWith(resolvedBasePath);
+  } catch (error) {
+    // For new files that don't exist yet, verify parent directory
+    const parentDir = path.dirname(resolvedPath);
+    try {
+      const realParentPath = await fs.realpath(parentDir);
+      const normalizedParent = normalizePath(realParentPath);
+      return normalizedParent.startsWith(resolvedBasePath);
+    } catch {
+      return false;
+    }
+  }
 }
 
 /**
