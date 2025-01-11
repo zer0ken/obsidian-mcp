@@ -133,17 +133,29 @@ export async function checkLocalPath(vaultPath: string): Promise<string | null> 
       if (realPath.startsWith('\\\\') || /^[a-zA-Z]:\\$/.test(realPath.slice(0, 3))) {
         // Check Windows drive type
         const drive = realPath[0].toUpperCase();
-        const cmd = `wmic logicaldisk where "DeviceID='${drive}:'" get DriveType /value`;
+        
+        // Helper functions for drive type checking
+        async function checkWithWmic() {
+          const cmd = `wmic logicaldisk where "DeviceID='${drive}:'" get DriveType /value`;
+          return await exec(cmd, { timeout: 5000 });
+        }
+
+        async function checkWithPowershell() {
+          const cmd = `powershell -Command "(Get-WmiObject -Class Win32_LogicalDisk | Where-Object { $_.DeviceID -eq '${drive}:' }).DriveType"`;
+          const { stdout, stderr } = await exec(cmd, { timeout: 5000 });
+          return { stdout: `DriveType=${stdout.trim()}`, stderr };
+        }
         
         try {
-          const { stdout, stderr } = await exec(cmd, { timeout: 5000 })
-            .catch((error: Error & { code?: string }) => {
-              if (error.code === 'ETIMEDOUT') {
-                // Timeout often indicates a network drive
-                return { stdout: 'DriveType=4', stderr: '' };
-              }
-              throw error;
-            });
+          let result: { stdout: string; stderr: string };
+          try {
+            result = await checkWithWmic();
+          } catch (wmicError) {
+            // Fallback to PowerShell if WMIC fails
+            result = await checkWithPowershell();
+          }
+
+          const { stdout, stderr } = result;
 
           if (stderr) {
             console.error(`Warning: Drive type check produced errors:`, stderr);
@@ -158,6 +170,9 @@ export async function checkLocalPath(vaultPath: string): Promise<string | null> 
             return 'Network, removable, or unknown drive type is not supported';
           }
         } catch (error: unknown) {
+          if ((error as Error & { code?: string }).code === 'ETIMEDOUT') {
+            return 'Network, removable, or unknown drive type is not supported';
+          }
           console.error(`Error checking drive type:`, error);
           // Fail safe: treat any errors as potential network drives
           return 'Unable to verify if drive is local';
