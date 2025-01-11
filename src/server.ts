@@ -79,7 +79,7 @@ export class ObsidianServer {
     this.server = new Server(
       {
         name: "obsidian-mcp",
-        version: "1.0.5"
+        version: "1.0.6"
       },
       {
         capabilities: {
