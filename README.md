@@ -21,6 +21,7 @@ This MCP has read and write access (if you allow it). Please. PLEASE backup your
 - An Obsidian vault
 
 ## Install
+
 Add to your Claude Desktop configuration:
 
 - macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
@@ -40,11 +41,13 @@ Add to your Claude Desktop configuration:
 Replace `/path/to/your/vault` with the absolute path to your Obsidian vault. For example:
 
 MacOS/Linux:
+
 ```json
 "/Users/username/Documents/MyVault"
 ```
 
 Windows:
+
 ```json
 "C:\\Users\\username\\Documents\\MyVault"
 ```
@@ -52,6 +55,7 @@ Windows:
 Restart Claude for Desktop after saving the configuration. You should see the hammer icon appear, indicating the server is connected.
 
 If you have connection issues, check the logs at:
+
 - MacOS: `~/Library/Logs/Claude/mcp*.log`
 - Windows: `%APPDATA%\Claude\logs\mcp*.log`
 
@@ -68,6 +72,7 @@ npm install
 # Build
 npm run build
 ```
+
 Then add to your Claude Desktop configuration:
 
 ```json
@@ -99,12 +104,14 @@ Then add to your Claude Desktop configuration:
 ## Documentation
 
 Additional documentation can be found in the `docs` directory:
+
 - `creating-tools.md` - Guide for creating new tools
 - `tool-examples.md` - Examples of using the available tools
 
 ## Security
 
 This server requires access to your Obsidian vault directory. When configuring the server, make sure to:
+
 - Only provide access to your intended vault directory
 - Review tool actions before approving them
 
