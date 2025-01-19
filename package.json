@@ -1,6 +1,6 @@
 {
   "name": "obsidian-mcp",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "MCP server for AI assistants to interact with Obsidian vaults",
   "type": "module",
   "main": "build/main.js",
@@ -12,6 +12,11 @@
     "README.md",
     "LICENSE"
   ],
+  "exports": {
+    ".": "./build/main.js",
+    "./utils/*": "./build/utils/*.js",
+    "./resources/*": "./build/resources/*.js"
+  },
   "peerDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4"
   },
@@ -23,12 +28,14 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@types/node": "^20.0.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "@types/bun": "latest"
   },
   "scripts": {
-    "build": "tsc && node -e \"require('fs').chmodSync('build/main.js', 0o755)\"",
-    "start": "node build/main.js",
-    "prepublishOnly": "npm run build"
+    "build": "bun build ./src/main.ts --outdir build --target node && chmod +x build/main.js",
+    "start": "bun build/main.js",
+    "prepublishOnly": "npm run build",
+    "inspect": "bunx @modelcontextprotocol/inspector bun ./build/main.js"
   },
   "keywords": [
     "obsidian",

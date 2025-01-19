@@ -140,8 +140,8 @@ export function formatSearchResult(result: SearchOperationResult): string {
   }
   
   // Separate filename and content matches
-  const filenameMatches = result.results.filter(r => r.matches.some(m => m.line === 0));
-  const contentMatches = result.results.filter(r => r.matches.some(m => m.line !== 0));
+  const filenameMatches = result.results.filter(r => r.matches?.some(m => m.line === 0));
+  const contentMatches = result.results.filter(r => r.matches?.some(m => m.line !== 0));
   
   // Add filename matches if any
   if (filenameMatches.length > 0) {
@@ -157,8 +157,8 @@ export function formatSearchResult(result: SearchOperationResult): string {
     contentMatches.forEach(result => {
       parts.push(`\nFile: ${result.file}`);
       result.matches
-        .filter(m => m.line !== 0) // Skip filename matches
-        .forEach(m => parts.push(`  Line ${m.line}: ${m.text}`));
+        ?.filter(m => m?.line !== 0) // Skip filename matches
+        ?.forEach(m => m && parts.push(`  Line ${m.line}: ${m.text}`));
     });
   }
   

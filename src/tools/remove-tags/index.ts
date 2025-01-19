@@ -1,25 +1,23 @@
 import { z } from "zod";
-import { Tool } from "../../types.js";
 import { promises as fs } from "fs";
 import path from "path";
-import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { McpError } from "@modelcontextprotocol/sdk/types.js";
 import { validateVaultPath } from "../../utils/path.js";
 import { fileExists, safeReadFile } from "../../utils/files.js";
-import { handleFsError, handleZodError } from "../../utils/errors.js";
 import {
   validateTag,
   parseNote,
   stringifyNote,
   removeTagsFromFrontmatter,
-  removeInlineTags,
-  matchesTagPattern,
-  isParentTag,
-  getRelatedTags
+  removeInlineTags
 } from "../../utils/tags.js";
-import { createSchemaHandler } from "../../utils/schema.js";
+import { createTool } from "../../utils/tool-factory.js";
 
 // Input validation schema with descriptions
 const schema = z.object({
+  vault: z.string()
+    .min(1, "Vault name cannot be empty")
+    .describe("Name of the vault containing the notes"),
   files: z.array(z.string())
     .min(1, "At least one file must be specified")
     .refine(
@@ -80,7 +78,7 @@ type RemoveTagsInput = z.infer<typeof schema>;
 
 async function removeTags(
   vaultPath: string,
-  params: RemoveTagsInput
+  params: Omit<RemoveTagsInput, 'vault'>
 ): Promise<RemoveTagsReport> {
   const results: RemoveTagsReport = {
     success: [],
@@ -181,14 +179,8 @@ async function removeTags(
   return results;
 }
 
-// Create schema handler that provides both Zod validation and JSON Schema
-const schemaHandler = createSchemaHandler(schema);
-
-export function createRemoveTagsTool(vaultPath: string): Tool {
-  if (!vaultPath) {
-    throw new Error("Vault path is required");
-  }
-  return {
+export function createRemoveTagsTool(vaults: Map<string, string>) {
+  return createTool<RemoveTagsInput>({
     name: "remove-tags",
     description: `Remove tags from notes in frontmatter and/or content.
 
@@ -198,117 +190,95 @@ Examples:
 - With options: { "files": ["note.md"], "tags": ["status"], "options": { "location": "frontmatter" } }
 - Pattern matching: { "files": ["note.md"], "options": { "patterns": ["status/*"] } }
 - INCORRECT: { "tags": ["#project"] } (don't include # symbol)`,
-    inputSchema: schemaHandler,
-    handler: async (args) => {
-      try {
-        // Parse and validate input
-        const parsed = schemaHandler.parse(args);
+    schema,
+    handler: async (args, vaultPath, _vaultName) => {
+      const results = await removeTags(vaultPath, {
+        files: args.files,
+        tags: args.tags,
+        options: args.options
+      });
         
-        // Ensure defaults are set
-        const validated = {
-          files: parsed.files,
-          tags: parsed.tags,
-          options: {
-            location: parsed.options?.location ?? 'both',
-            normalize: parsed.options?.normalize ?? true,
-            preserveChildren: parsed.options?.preserveChildren ?? false,
-            patterns: parsed.options?.patterns ?? []
-          }
-        };
-        
-        // Execute tag removal
-        const results = await removeTags(vaultPath, validated);
-        
-        // Format detailed response message
-        let message = '';
-        
-        // Add success summary
-        if (results.success.length > 0) {
-          message += `Successfully processed tags in: ${results.success.join(', ')}\n\n`;
-        }
-        
-        // Add detailed changes for each file
-        for (const [filename, details] of Object.entries(results.details)) {
-          if (details.removedTags.length > 0 || details.preservedTags.length > 0) {
-            message += `Changes in ${filename}:\n`;
-            
-            if (details.removedTags.length > 0) {
-              message += '  Removed tags:\n';
-              const byLocation = details.removedTags.reduce((acc, change) => {
-                if (!acc[change.location]) acc[change.location] = new Map();
-                const key = change.line ? `${change.location} (line ${change.line})` : change.location;
-                const locationMap = acc[change.location];
-                if (locationMap) {
-                  if (!locationMap.has(key)) {
-                    locationMap.set(key, new Set());
-                  }
-                  const tagSet = locationMap.get(key);
-                  if (tagSet) {
-                    tagSet.add(change.tag);
-                  }
-                }
-                return acc;
-              }, {} as Record<string, Map<string, Set<string>>>);
-              
-              for (const [location, locationMap] of Object.entries(byLocation)) {
-                for (const [key, tags] of locationMap.entries()) {
-                  message += `    ${key}: ${Array.from(tags).join(', ')}\n`;
-                }
-              }
-            }
-            
-            if (details.preservedTags.length > 0) {
-              message += '  Preserved tags:\n';
-              const byLocation = details.preservedTags.reduce((acc, change) => {
-                if (!acc[change.location]) acc[change.location] = new Map();
-                const key = change.line ? `${change.location} (line ${change.line})` : change.location;
-                const locationMap = acc[change.location];
-                if (locationMap) {
-                  if (!locationMap.has(key)) {
-                    locationMap.set(key, new Set());
-                  }
-                  const tagSet = locationMap.get(key);
-                  if (tagSet) {
-                    tagSet.add(change.tag);
-                  }
-                }
-                return acc;
-              }, {} as Record<string, Map<string, Set<string>>>);
-              
-              for (const [location, locationMap] of Object.entries(byLocation)) {
-                for (const [key, tags] of locationMap.entries()) {
-                  message += `    ${key}: ${Array.from(tags).join(', ')}\n`;
-                }
-              }
-            }
-            
-            message += '\n';
-          }
-        }
-        
-        // Add errors if any
-        if (results.errors.length > 0) {
-          message += 'Errors:\n';
-          results.errors.forEach(error => {
-            message += `  ${error.file}: ${error.error}\n`;
-          });
-        }
-
-        return {
-          content: [{
-            type: "text",
-            text: message.trim()
-          }]
-        };
-      } catch (error) {
-        if (error instanceof z.ZodError) {
-          throw new McpError(
-            ErrorCode.InvalidRequest,
-            `Invalid arguments: ${error.errors.map(e => e.message).join(", ")}`
-          );
-        }
-        throw error;
+      // Format detailed response message
+      let message = '';
+      
+      // Add success summary
+      if (results.success.length > 0) {
+        message += `Successfully processed tags in: ${results.success.join(', ')}\n\n`;
       }
+      
+      // Add detailed changes for each file
+      for (const [filename, details] of Object.entries(results.details)) {
+        if (details.removedTags.length > 0 || details.preservedTags.length > 0) {
+          message += `Changes in ${filename}:\n`;
+          
+          if (details.removedTags.length > 0) {
+            message += '  Removed tags:\n';
+            const byLocation = details.removedTags.reduce((acc, change) => {
+              if (!acc[change.location]) acc[change.location] = new Map();
+              const key = change.line ? `${change.location} (line ${change.line})` : change.location;
+              const locationMap = acc[change.location];
+              if (locationMap) {
+                if (!locationMap.has(key)) {
+                  locationMap.set(key, new Set());
+                }
+                const tagSet = locationMap.get(key);
+                if (tagSet) {
+                  tagSet.add(change.tag);
+                }
+              }
+              return acc;
+            }, {} as Record<string, Map<string, Set<string>>>);
+            
+            for (const [location, locationMap] of Object.entries(byLocation)) {
+              for (const [key, tags] of locationMap.entries()) {
+                message += `    ${key}: ${Array.from(tags).join(', ')}\n`;
+              }
+            }
+          }
+          
+          if (details.preservedTags.length > 0) {
+            message += '  Preserved tags:\n';
+            const byLocation = details.preservedTags.reduce((acc, change) => {
+              if (!acc[change.location]) acc[change.location] = new Map();
+              const key = change.line ? `${change.location} (line ${change.line})` : change.location;
+              const locationMap = acc[change.location];
+              if (locationMap) {
+                if (!locationMap.has(key)) {
+                  locationMap.set(key, new Set());
+                }
+                const tagSet = locationMap.get(key);
+                if (tagSet) {
+                  tagSet.add(change.tag);
+                }
+              }
+              return acc;
+            }, {} as Record<string, Map<string, Set<string>>>);
+            
+            for (const [location, locationMap] of Object.entries(byLocation)) {
+              for (const [key, tags] of locationMap.entries()) {
+                message += `    ${key}: ${Array.from(tags).join(', ')}\n`;
+              }
+            }
+          }
+          
+          message += '\n';
+        }
+      }
+      
+      // Add errors if any
+      if (results.errors.length > 0) {
+        message += 'Errors:\n';
+        results.errors.forEach(error => {
+          message += `  ${error.file}: ${error.error}\n`;
+        });
+      }
+
+      return {
+        content: [{
+          type: "text",
+          text: message.trim()
+        }]
+      };
     }
-  };
+  }, vaults);
 }
