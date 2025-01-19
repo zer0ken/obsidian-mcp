@@ -1,5 +1,7 @@
 # Obsidian MCP Server
 
+[![smithery badge](https://smithery.ai/badge/obsidian-mcp)](https://smithery.ai/server/obsidian-mcp)
+
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that enables AI assistants to interact with Obsidian vaults, providing tools for reading, creating, editing and managing notes and tags.
 
 ## Warning!!!
@@ -21,6 +23,8 @@ This MCP has read and write access (if you allow it). Please. PLEASE backup your
 - An Obsidian vault
 
 ## Install
+
+### Installing Manually
 
 Add to your Claude Desktop configuration:
 
@@ -58,6 +62,16 @@ If you have connection issues, check the logs at:
 
 - MacOS: `~/Library/Logs/Claude/mcp*.log`
 - Windows: `%APPDATA%\Claude\logs\mcp*.log`
+
+
+### Installing via Smithery
+Warning: I am not affiliated with Smithery. I have not tested using it and encourage users to install manually if they can.
+
+To install Obsidian for Claude Desktop automatically via [Smithery](https://smithery.ai/server/obsidian-mcp):
+
+```bash
+npx -y @smithery/cli install obsidian-mcp --client claude
+```
 
 ## Development
 
