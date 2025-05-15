@@ -100,9 +100,9 @@ export class ObsidianServer {
     this.setupHandlers();
 
     // Setup connection monitoring with grace period for initialization
-    this.connectionMonitor.start(() => {
-      this.server.close();
-    });
+    // this.connectionMonitor.start(() => {
+    //   this.server.close();
+    // });
     
     // Update activity during initialization
     this.connectionMonitor.updateActivity();
